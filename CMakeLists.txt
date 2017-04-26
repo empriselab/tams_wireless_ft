@@ -6,6 +6,7 @@ project(tams_wireless_ft)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
+  eigen
   roscpp
   std_msgs
   sensor_msgs  
@@ -123,7 +124,7 @@ catkin_package(
 include_directories(
   ${catkin_INCLUDE_DIRS}
   $(Boost_INCLUDE_DIRS)
-  # $(Eigen_INCLUDE_DIRS)
+  $(Eigen_INCLUDE_DIRS)
 )
 
 ## Declare a C++ library
@@ -146,7 +147,7 @@ include_directories(
 
 add_executable(tams_wireless_ft src/wireless_ft.cpp)
 target_link_libraries(tams_wireless_ft
-  ${catkin_LIBRARIES} usb-1.0 pthread
+  ${catkin_LIBRARIES} ${Eigen_LIBRARIES} pthread
 )
 
 ## Add cmake target dependencies of the executable

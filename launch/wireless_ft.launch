@@ -10,7 +10,7 @@
   2016.12.13 - fnh: created
   -->
 
-  <node name="polhemus" pkg="tams_wireless_ft" type="tams_wireless_ft" output="screen" >
+  <node name="wireless_ft" pkg="tams_wireless_ft" type="tams_wireless_ft" output="screen" >
     <param name="hostname" value="192.168.104.107" />
     <param name="telnet_port" value="23" />
     <param name="udp_port" value="49152" />
@@ -21,25 +21,15 @@
 
     <param name="reference_frame" value="world" />
     <param name="tf_prefix" value="wireless_ft_" />
-
   </node>
 
+
   <!-- 
-  <node name="polhemus_frame_publisher" 
+  <node name="wireless_ft_frame_publisher" 
         pkg="tf"
         type="static_transform_publisher"
-        args="0 0 0  0 0 0 world polhemus_frame 1" />
+        args="0 0 0  0 0 0 world wireless_ft_frame 1" />
   -->
-
-  <!--
-  <node name="polhemus_frame_publisher" 
-        pkg="tf"
-        type="static_transform_publisher"
-        args="-1.726  0.634  -2.030 -0.378 0.216 0.797 -0.418 world polhemus_frame 1" />
-  -->
-
- 
-
 
 
   <!-- rviz --> 

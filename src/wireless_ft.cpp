@@ -40,9 +40,13 @@
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 
+#include <Eigen/Core>
+#include <Eigen/Dense>
+
 #include <sstream>
 
 #include <ros/ros.h>
+#include <sensor_msgs/Joy.h>  // buttons: channel on/off, axes: sensor counts
 #include <geometry_msgs/WrenchStamped.h>
 
 
@@ -138,8 +142,114 @@ __attribute__ ((__packed__));
 
 
 static pthread_mutex_t mutex;
+static bool debug = true;
 
 
+/** 
+ * WirelessFTCalibration: helper class to store and manage
+ * calibration of the ATi force/torque transducers.
+ */
+class WirelessFTCalibration {
+  public:
+    WirelessFTCalibration( std::string transducerName, std::string calibrationName );
+    Eigen::VectorXd getWrench( Eigen::VectorXd counts );
+    void parseGains( std::string tokens );
+    void parseOffsets( std::string tokens );
+    void parseCalibration( std::string tokens );
+    void parseYaml( std::string paramName );
+
+  // private:
+    int NG; // 6
+    Eigen::VectorXd gains;
+    Eigen::VectorXd offsets;
+    Eigen::MatrixXd calibration; // (Fx Fy Fz Tx Ty Tz) * NG
+    std::string     transducerName;
+    std::string     calibrationName;
+    double          countsPerN;
+    double          countsPerNm;
+};
+
+
+WirelessFTCalibration::WirelessFTCalibration( std::string transducerName, 
+                                              std::string calibrationName ):
+  NG( 6 ), gains( 6 ), offsets( 6 ), calibration( 6, 6 ),
+  transducerName( transducerName ),
+  calibrationName( calibrationName )
+{
+  if (debug) ROS_INFO( "WirelessFTCalibration::<init>..." );
+  gains.setOnes();
+  offsets.setZero();
+  calibration.setIdentity();
+}
+
+
+// xxxzzz
+Eigen::VectorXd WirelessFTCalibration::getWrench( Eigen::VectorXd counts ) {
+  std::cout << "getWrench(" << transducerName << "," << calibrationName << "):" << "\n";
+  Eigen::VectorXd    tmp1 = (counts - offsets);
+  Eigen::VectorXd    tmp2 = tmp1 / 1000000; // divide by counts
+  std::cout << "... tmp1:\n" << tmp1 << "\n";
+
+  // Eigen::VectorXd scaled = gains.array() * tmp2.array();
+  Eigen::VectorXd scaled = tmp2.array() / gains.array();
+
+  std::cout << "... scaled:\n" << scaled << "\n";
+  Eigen::VectorXd result = calibration * scaled;
+  std::cout << "getWrench: scaled sensor data: " << scaled << "\n";
+  std::cout << "getWrench: Fx Fy Fz Tx Ty Tz: " << result << "\n";
+  return result;
+}
+
+
+void WirelessFTCalibration::parseGains( std::string tokens ) { 
+  std::stringstream ss;
+  ss << tokens;
+  for( int i=0; i < NG; i++ ) {
+    double value = 0.0;
+    ss >> value;
+    gains( i ) = value;
+  }
+  if (debug) std::cout << "parseGains(" << transducerName << "," << calibrationName << "):\n" << gains << "\n";
+}
+
+
+void WirelessFTCalibration::parseOffsets( std::string tokens ) {
+  std::stringstream ss;
+  ss << tokens;
+  for( int i=0; i < NG; i++ ) {
+    double value = 0.0;
+    ss >> value;
+    offsets( i ) = value;
+  }
+  if (debug) std::cout << "parseOffsets(" << transducerName << "," << calibrationName << "):\n" << offsets << "\n";
+}
+
+
+void WirelessFTCalibration::parseCalibration( std::string tokens ) { 
+  std::stringstream ss;
+  ss << tokens;
+  for( int i=0; i < 6; i++ ) { // Fx Fy Fz Tx Ty Tz
+    for( int j=0; j < NG; j++ ) {
+      double value = 0.0;
+      ss >> value;
+      calibration(i,j) = value;
+    }
+  }
+  if (debug) std::cout << "parseCalibration(" << transducerName << "," << calibrationName << "):\n" << calibration << "\n";
+}
+
+
+void WirelessFTCalibration::parseYaml( std::string paramName) { 
+  ROS_ERROR( "WirelessFTCalibration::parseYaml: IMPLEMENT ME!!!" );
+}
+
+
+
+
+
+/**
+ * WirelessFT: ROS C++ driver for the ATi Wireless F/T system.
+ */
 class WirelessFT {
   public:
     WirelessFT();
@@ -148,21 +258,30 @@ class WirelessFT {
     int  telnetConnect( std::string hostname, int port );
     int  telnetDisconnect();
     int  telnetCommand( std::string & response, std::string command, unsigned int micros );
+
     int  udpConnect( std::string hostname, int port );
-    int  udpCommand();
+    int  udpStartStreaming();
+    int  udpStopStreaming();
+    int  udpPing();
+    int  udpResetTelnetSocket();
+
     int  readDataPacket();
     int  decodeDataPacket( char* buffer, unsigned int n_bytes );
     void run();
+    void shutdown();
 
 
   private:
-     unsigned char  udpCommandSequence;
-     unsigned short crcBuf( char* buff, int len );
-     unsigned short crcByte( unsigned short crc, char ch );
+    unsigned char  udpCommandSequence;
+    unsigned short crcBuf( char* buff, int len );
+    unsigned short crcByte( unsigned short crc, char ch );
 
-
+    // double sensor_counts[NUMBER_OF_TRANSDUCERS][NUMBER_OF_STRAIN_GAGES];
+    Eigen::MatrixXd  sensor_counts;
+    std::vector<WirelessFTCalibration> factory_calibrations;
 
     ros::NodeHandle   nh;
+    ros::Publisher    raw_sensor_counts_publisher;
     ros::Publisher    wrench_1_publisher;
     ros::Publisher    wrench_2_publisher;
     ros::Publisher    wrench_3_publisher;
@@ -176,12 +295,15 @@ class WirelessFT {
     std::string hostname;
     int telnetSocket; // port 23 aka telnet
     int udpSocket;    // port 49152 for data streaming
+    bool streaming;
 
 }; // end class WirelessFT
 
 
 
-WirelessFT::WirelessFT() {
+WirelessFT::WirelessFT() :
+  streaming( false )
+{
   ROS_INFO( "WirelessFT::<init>..." );
   pthread_mutexattr_t attr;
   pthread_mutexattr_init(&attr);
@@ -189,10 +311,64 @@ WirelessFT::WirelessFT() {
   pthread_mutex_init(&mutex, &attr);
 
   n_channels = 6;
+  char  udpCommandSequence = 0;
  
   // TODO xxxzzz: read node params 
 
-  char  udpCommandSequence = 0;
+  // calibration stuff
+  //
+  ROS_INFO( "initializing factor calibration..." );
+  WirelessFTCalibration cal1( "T1", "CALIB_1" );
+  cal1.parseGains( "574 594 618 650 602 586" );
+  cal1.parseOffsets( "0 0 0 0 0 0" );
+  cal1.parseCalibration( 
+      "-1.840735  14.82621  24.62213 -504.6677 -41.82769  517.6721 " 
+      " -28.2255  612.1705  8.692911  -272.207  29.95003 -315.0209 "
+      " 600.7707 -1.183056  566.2838   20.7928  567.9268  18.35527 "
+      "-222.2077  3693.643  3252.839 -1542.229 -2947.771 -1979.439 "
+      "-3853.554 -52.50696  1631.666  3108.785   2139.37 -3090.429 "
+      "-91.21972  2335.882 -113.9305  2182.562 -173.7546  2260.616 " );
+
+  WirelessFTCalibration cal2( "T2", "CALIB_1" );
+  cal2.parseGains( "598 622 638 650 614 602" );
+  cal2.parseOffsets( "31087 32019 29522 31190 28980 30852" );
+  cal2.parseCalibration( 
+      "0.6105832  11.82515 -27.75596 -517.7919  28.04681  531.0735 "
+      " 25.59246  616.7253 -14.80488 -284.2845 -18.88448 -315.8253 " 
+      " 593.0466  14.84871  558.9457 -10.66256  562.8641  10.35539 "
+      " 130.5689  3726.847  3047.324 -1787.495 -3209.956 -1953.829 "
+      "-3797.911 -156.7664   1916.83  3090.215  1702.124 -3183.832 "
+      " 104.3058  2344.414  130.2406  2179.418  109.7938   2272.98 " ); 
+    
+  WirelessFTCalibration cal3( "T3", "CALIB_1" );
+  WirelessFTCalibration cal4( "T4", "CALIB_1" );
+  WirelessFTCalibration cal5( "T5", "CALIB_1" );
+
+  factory_calibrations.push_back( cal1 );
+  factory_calibrations.push_back( cal2 );
+  factory_calibrations.push_back( cal3 );
+  factory_calibrations.push_back( cal4 );
+  factory_calibrations.push_back( cal5 );
+
+
+  ROS_ERROR( "before sensor_counts" );
+  sensor_counts = Eigen::MatrixXd( NUMBER_OF_TRANSDUCERS, NUMBER_OF_STRAIN_GAGES );
+  ROS_ERROR( "survived sensor_counts" );
+  for( int t=0; t < NUMBER_OF_TRANSDUCERS; t++ ) {
+    for( int g=0; g < NUMBER_OF_STRAIN_GAGES; g++ ) {
+      // sensor_counts[t][g] = NAN;
+      sensor_counts(t,g) = NAN;
+    }
+  }
+  ROS_ERROR( "survived NANing..." );
+
+  // publishers
+  raw_sensor_counts_publisher = nh.advertise<sensor_msgs::Joy>( "/wireless_ft/raw_sensor_counts", 1 );
+  wrench_1_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "/wireless_ft/wrench_1", 1 );
+  wrench_2_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "/wireless_ft/wrench_2", 1 );
+  wrench_3_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "/wireless_ft/wrench_3", 1 );
+  wrench_4_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "/wireless_ft/wrench_4", 1 );
+  wrench_5_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "/wireless_ft/wrench_5", 1 );
 }
 
 
@@ -249,7 +425,7 @@ int WirelessFT::telnetDisconnect() {
   ROS_INFO( "WirelessFT: telnetDisconnect..." );
   try {
     if (telnetSocket >= 0) {
-      shutdown( telnetSocket, SHUT_RDWR );
+      ::shutdown( telnetSocket, SHUT_RDWR );
       close( telnetSocket );
       return 0;
     }
@@ -427,9 +603,9 @@ unsigned short WirelessFT::crcBuf( char* buff, int len )
 }
 
 
-int WirelessFT::udpCommand() 
+int WirelessFT::udpStartStreaming() 
 {
-  ROS_ERROR( "udpCommand: IMPLEMENT ME!!!" );
+  ROS_ERROR( "udpStartStreaming: IMPLEMENT ME!!!" );
   // bytes  start streaming:
   //  2     length including crc = 10
   //  1     sequence number, 0,1,2,...255,0,...
@@ -437,24 +613,15 @@ int WirelessFT::udpCommand()
   //  4     number_of_packets, 0 for infinite
   //  2     crc 
 
-  /*
-  std::ostream ss;
-  ss << (unsigned short) 10;
-  ss << (unsigned char) udpCommandSequence; udpCommandSequence++;
-  ss << (unsigned char) 1; // start streaming command
-  ss << (unsigned long) 25; // 25 packets, use 0 for infinite
-  ss << crc;
-  char* buffer = ss.getBytes();
-  */
-  char buffer[1024];
+  char buffer[10];
   buffer[0] = 0;
-  buffer[1] = (unsigned char) (0x00FF & 10);
-  buffer[2] = udpCommandSequence;
-  buffer[3] = (unsigned char) 1;
-  buffer[4] = (unsigned char) 0;
+  buffer[1] = (unsigned char) (0x00FF & 10); // length
+  buffer[2] = udpCommandSequence;            // seq-number
+  buffer[3] = (unsigned char) 1;             // start_streaming
+  buffer[4] = (unsigned char) 0;             // number of packets
   buffer[5] = (unsigned char) 0;
-  buffer[6] = (unsigned char) 10;
-  buffer[7] = (unsigned char) 255;
+  buffer[6] = (unsigned char) 0; // 10
+  buffer[7] = (unsigned char) 0; // 255;
 
   unsigned short crc = crcBuf( buffer, 8 );
   buffer[8] = (unsigned char) (crc >> 8);
@@ -462,8 +629,83 @@ int WirelessFT::udpCommand()
 
   unsigned int length = 10;
   int n = write( udpSocket, buffer, length );
-  ROS_INFO( "udpCommand: wrote %d bytes", n );
+  ROS_INFO( "udpStartStreaming: wrote %d bytes", n );
 }
+
+
+int WirelessFT::udpStopStreaming() 
+{
+  // bytes  stop streaming:
+  //  2     length including crc = 6
+  //  1     sequence number, 0,1,2,...255,0,...
+  //  1     value 1 = start_streaming_command
+  //  2     crc 
+
+  char buffer[6];
+  buffer[0] = 0;
+  buffer[1] = (unsigned char) (0x00FF & 6); // length including crc
+  buffer[2] = udpCommandSequence;           // seq-number
+  buffer[3] = (unsigned char) 2;            // stop_streaming
+
+  unsigned short crc = crcBuf( buffer, 4 );
+  buffer[4] = (unsigned char) (crc >> 8);
+  buffer[5] = (unsigned char) (crc & 0x00ff);
+
+  unsigned int length = 6;
+  int n = write( udpSocket, buffer, length );
+  ROS_INFO( "udpStopStreaming: wrote %d bytes", n );
+}
+
+
+int WirelessFT::udpPing() 
+{
+  // bytes  ping:
+  //  2     length including crc = 6
+  //  1     sequence number, 0,1,2,...255,0,...
+  //  1     value 4 = ping
+  //  2     crc 
+
+  char buffer[6];
+  buffer[0] = 0;
+  buffer[1] = (unsigned char) (0x00FF & 6); // length including crc
+  buffer[2] = udpCommandSequence;           // seq-number
+  buffer[3] = (unsigned char) 4;            // stop_streaming
+
+  unsigned short crc = crcBuf( buffer, 4 );
+  buffer[4] = (unsigned char) (crc >> 8);
+  buffer[5] = (unsigned char) (crc & 0x00ff);
+
+  unsigned int length = 6;
+  int n = write( udpSocket, buffer, length );
+  ROS_INFO( "udpStopStreaming: wrote %d bytes", n );
+}
+
+
+int WirelessFT::udpResetTelnetSocket() 
+{
+  // bytes  reset telnet socket:
+  //  2     length including crc = 6
+  //  1     sequence number, 0,1,2,...255,0,...
+  //  1     value 5 = reset telnet socket
+  //  2     crc 
+
+  char buffer[6];
+  buffer[0] = 0;
+  buffer[1] = (unsigned char) (0x00FF & 6); // length including crc
+  buffer[2] = udpCommandSequence;           // seq-number
+  buffer[3] = (unsigned char) 5;            // reset_telnet_socket
+
+  unsigned short crc = crcBuf( buffer, 4 );
+  buffer[4] = (unsigned char) (crc >> 8);
+  buffer[5] = (unsigned char) (crc & 0x00ff);
+
+  unsigned int length = 6;
+  int n = write( udpSocket, buffer, length );
+  ROS_INFO( "udpStopStreaming: wrote %d bytes", n );
+}
+
+
+
 
 
 int parseInteger( char* buffer, int pos ) {
@@ -506,9 +748,63 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
              parseInteger( buffer, pos+12 ), 
              parseInteger( buffer, pos+16 ), 
              parseInteger( buffer, pos+20 ) );
+
+    sensor_counts(t,0) = parseInteger( buffer, pos+0 );
+    sensor_counts(t,1) = parseInteger( buffer, pos+4 );
+    sensor_counts(t,2) = parseInteger( buffer, pos+8 );
+    sensor_counts(t,3) = parseInteger( buffer, pos+12 );
+    sensor_counts(t,4) = parseInteger( buffer, pos+16 );
+    sensor_counts(t,5) = parseInteger( buffer, pos+20 );
+
     pos += 24;
   }
   printf( "\n\n" );
+
+  int seq = parseInteger( buffer, 4 );
+
+  sensor_msgs::Joy joy;
+  joy.header.stamp    = ros::Time::now();
+  joy.header.frame_id = "Wireless FT";
+  joy.header.seq      = seq;
+  joy.axes.resize( 5*NUMBER_OF_STRAIN_GAGES ); // FIXME
+  for( int t=0; t < 5; t++ ) {
+    for( int g=0; g < NUMBER_OF_STRAIN_GAGES; g++ ) {
+      joy.axes[ t*6+g ] = sensor_counts(t,g);
+    }
+  }
+  raw_sensor_counts_publisher.publish( joy );
+
+  // convert to Wrench
+  Eigen::VectorXd w1 = factory_calibrations[0].getWrench( sensor_counts.row(0) );
+  Eigen::VectorXd w2 = factory_calibrations[1].getWrench( sensor_counts.row(1) );
+  // ...
+
+  geometry_msgs::WrenchStamped wrench1;
+  wrench1.header.stamp = ros::Time::now();
+  wrench1.header.seq   = seq;
+  wrench1.header.frame_id = "transducer1";
+  wrench1.wrench.force.x  = w1(0);
+  wrench1.wrench.force.y  = w1(1);
+  wrench1.wrench.force.z  = w1(2);
+  wrench1.wrench.torque.x = w1(3);
+  wrench1.wrench.torque.y = w1(4);
+  wrench1.wrench.torque.z = w1(5);
+
+  geometry_msgs::WrenchStamped wrench2;
+  wrench2.header.stamp = ros::Time::now();
+  wrench2.header.seq   = seq;
+  wrench2.header.frame_id = "transducer2";
+  wrench2.wrench.force.x  = w2(0);
+  wrench2.wrench.force.y  = w2(1);
+  wrench2.wrench.force.z  = w2(2);
+  wrench2.wrench.torque.x = w2(3);
+  wrench2.wrench.torque.y = w2(4);
+  wrench2.wrench.torque.z = w2(5);
+
+  wrench_1_publisher.publish( wrench1 );
+  wrench_2_publisher.publish( wrench2 );
+
+
 }
 
 
@@ -554,12 +850,30 @@ void WirelessFT::run() {
   telnetCommand( response, "gateip\r\n" );
   telnetCommand( response, "ip\r\n", 5000 );
   telnetCommand( response, "bright\r\n" );
-  telnetCommand( response, "xpwr\r\n" );
+  telnetCommand( response, "xpwr off\r\n" );
+
   telnetCommand( response, "trans 1\r\n" );
-  // telnetCommand( response, "calib 1\r\n" );
-  // telnetCommand( response, "cal\r\n" );
   telnetCommand( response, "calib 3\r\n" );
   telnetCommand( response, "cal\r\n" );
+
+  telnetCommand( response, "trans 2\r\n" );
+  telnetCommand( response, "calib 3\r\n" );
+  telnetCommand( response, "cal\r\n" );
+
+  telnetCommand( response, "trans 3\r\n" );
+  telnetCommand( response, "calib 3\r\n" );
+  telnetCommand( response, "cal\r\n" );
+
+  telnetCommand( response, "trans 4\r\n" );
+  telnetCommand( response, "calib 3\r\n" );
+  telnetCommand( response, "cal\r\n" );
+
+  telnetCommand( response, "trans 5\r\n" );
+  telnetCommand( response, "calib 3\r\n" );
+  telnetCommand( response, "cal\r\n" );
+
+  telnetCommand( response, "xpwr on\r\n" );
+
   telnetCommand( response, "rate 125 16\r\n" );
   // telnetCommand( response, "filter 1 \n" );
 
@@ -567,8 +881,8 @@ void WirelessFT::run() {
   status = udpConnect( "192.168.104.107", 49152 );
   if (status == 0) ROS_INFO( "Connected at port 49152..." );
 
-  udpCommand(); // send start streaming
-
+  udpStartStreaming(); // send start streaming
+  streaming = true;
 
   unsigned int iteration = 0;
   unsigned int received = 0;
@@ -589,9 +903,16 @@ void WirelessFT::run() {
     rate.sleep();
   } 
 
+  if (streaming) udpStopStreaming();
   telnetDisconnect();
 
   exit( 0 );
+}
+
+
+
+void WirelessFT::shutdown() {
+  ROS_ERROR( "WirelessFT.shutdown(): IMPLEMENT ME!!!" );
 }
 
 
