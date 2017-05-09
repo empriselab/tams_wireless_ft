@@ -341,6 +341,16 @@ WirelessFT::WirelessFT() :
       " 104.3058  2344.414  130.2406  2179.418  109.7938   2272.98 " ); 
     
   WirelessFTCalibration cal3( "T3", "CALIB_1" );
+  cal3.parseGains( "618 650 638 638 686 706" );
+  cal3.parseOffsets( "29906 31020 29168 30516 28134 30628" );
+  cal3.parseCalibration( 
+      "0.5407506 -11.06681  603.3965  -109.276 -3841.928  -39.5272 "
+      "-10.44727  616.4824  25.85361  3717.271 -104.0906  2258.229 " 
+      " 29.16257  17.27281  568.6636  3233.831  1654.897 -136.5534 "
+      "-532.5557 -309.5431  6.927393 -1816.022  3245.616  2312.379 "
+      "-27.62092  14.28631  549.3841 -3022.306  1944.764 -101.4407 "
+      " 501.5891 -292.6168  24.70506  -1906.68 -2954.505    2185.1 " ); 
+  
   WirelessFTCalibration cal4( "T4", "CALIB_1" );
   WirelessFTCalibration cal5( "T5", "CALIB_1" );
 
@@ -507,19 +517,19 @@ int WirelessFT::udpConnect( std::string hostname, int udp_port ) {
     return -1;
   }
   
-/*	
-	// zero out the structure
-	memset((char *) &si_me, 0, sizeof(si_me));
-	
-	si_me.sin_family = AF_INET;
-	si_me.sin_port = htons(PORT);
-	si_me.sin_addr.s_addr = htonl(INADDR_ANY);
-	
-	//bind socket to port
-	if( bind(s , (struct sockaddr*)&si_me, sizeof(si_me) ) == -1)
-	{
-		die("bind");
-	}}
+/*  
+  // zero out the structure
+  memset((char *) &si_me, 0, sizeof(si_me));
+  
+  si_me.sin_family = AF_INET;
+  si_me.sin_port = htons(PORT);
+  si_me.sin_addr.s_addr = htonl(INADDR_ANY);
+  
+  //bind socket to port
+  if( bind(s , (struct sockaddr*)&si_me, sizeof(si_me) ) == -1)
+  {
+    die("bind");
+  }}
 */
 
   struct hostent *server = gethostbyname( hostname.c_str() );
@@ -777,6 +787,7 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
   // convert to Wrench
   Eigen::VectorXd w1 = factory_calibrations[0].getWrench( sensor_counts.row(0) );
   Eigen::VectorXd w2 = factory_calibrations[1].getWrench( sensor_counts.row(1) );
+  Eigen::VectorXd w3 = factory_calibrations[2].getWrench( sensor_counts.row(2) );
   // ...
 
   geometry_msgs::WrenchStamped wrench1;
@@ -801,8 +812,21 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
   wrench2.wrench.torque.y = w2(4);
   wrench2.wrench.torque.z = w2(5);
 
+  geometry_msgs::WrenchStamped wrench3;
+  wrench3.header.stamp = ros::Time::now();
+  wrench3.header.seq   = seq;
+  wrench3.header.frame_id = "transducer3";
+  wrench3.wrench.force.x  = w3(0);
+  wrench3.wrench.force.y  = w3(1);
+  wrench3.wrench.force.z  = w3(2);
+  wrench3.wrench.torque.x = w3(3);
+  wrench3.wrench.torque.y = w3(4);
+  wrench3.wrench.torque.z = w3(5);
+
   wrench_1_publisher.publish( wrench1 );
   wrench_2_publisher.publish( wrench2 );
+  wrench_3_publisher.publish( wrench3 );
+
 
 
 }
@@ -846,11 +870,24 @@ void WirelessFT::run() {
   // usleep( 1*1000*1000 );
 
   telnetCommand( response, "band\r\n" );
+  // usleeps necessary to not get stuck in telnet communication
+    usleep( 0.2*1000*1000 );
+
   telnetCommand( response, "ssid\r\n" );
+    usleep( 0.2*1000*1000 );
+
   telnetCommand( response, "gateip\r\n" );
+    usleep( 0.2*1000*1000 );
+
   telnetCommand( response, "ip\r\n", 5000 );
+    usleep( 0.2*1000*1000 );
+
   telnetCommand( response, "bright\r\n" );
+    usleep( 0.2*1000*1000 );
+
   telnetCommand( response, "xpwr off\r\n" );
+    usleep( 0.2*1000*1000 );
+
 
   telnetCommand( response, "trans 1\r\n" );
   telnetCommand( response, "calib 3\r\n" );
