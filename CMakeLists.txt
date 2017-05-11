@@ -6,7 +6,7 @@ project(tams_wireless_ft)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
-  eigen
+  # eigen
   roscpp
   std_msgs
   sensor_msgs  
