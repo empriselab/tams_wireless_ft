@@ -182,22 +182,20 @@ WirelessFTCalibration::WirelessFTCalibration( std::string transducerName,
   calibration.setIdentity();
 }
 
+/**
+* @param: counts in N and Nm force units * 1 000 000 
+* return: force values in N and torque values in Nm
+*/
 
-// xxxzzz
 Eigen::VectorXd WirelessFTCalibration::getWrench( Eigen::VectorXd counts ) {
   std::cout << "getWrench(" << transducerName << "," << calibrationName << "):" << "\n";
-  Eigen::VectorXd    tmp1 = (counts - offsets);
-  Eigen::VectorXd    tmp2 = tmp1 / 1000000; // divide by counts
-  std::cout << "... tmp1:\n" << tmp1 << "\n";
+  Eigen::VectorXd    valuesF = counts / 1000000; // N
+  Eigen::VectorXd    valuesT = (counts / 1000000) / 1000; //Nmm to Nm
+  Eigen::VectorXd    valuesFT(6);
 
-  // Eigen::VectorXd scaled = gains.array() * tmp2.array();
-  Eigen::VectorXd scaled = tmp2.array() / gains.array();
-
-  std::cout << "... scaled:\n" << scaled << "\n";
-  Eigen::VectorXd result = calibration * scaled;
-  std::cout << "getWrench: scaled sensor data: " << scaled << "\n";
-  std::cout << "getWrench: Fx Fy Fz Tx Ty Tz: " << result << "\n";
-  return result;
+  valuesFT << valuesF[0], valuesF[1], valuesF[2], valuesT[3], valuesT[4], valuesT[5];
+  std::cout << "... valuesFT:\n" << valuesFT << "\n";
+  return valuesFT;
 }
 
 
@@ -888,31 +886,38 @@ void WirelessFT::run() {
   telnetCommand( response, "xpwr off\r\n" );
     usleep( 0.2*1000*1000 );
 
+  //telnetCommand( response, "bias 2 off");
+  //  usleep( 0.2*1000*1000 );
+
+
 
   telnetCommand( response, "trans 1\r\n" );
-  telnetCommand( response, "calib 3\r\n" );
+  telnetCommand( response, "calib 1\r\n" );
   telnetCommand( response, "cal\r\n" );
 
   telnetCommand( response, "trans 2\r\n" );
-  telnetCommand( response, "calib 3\r\n" );
+  telnetCommand( response, "calib 1\r\n" );
   telnetCommand( response, "cal\r\n" );
 
   telnetCommand( response, "trans 3\r\n" );
-  telnetCommand( response, "calib 3\r\n" );
+  telnetCommand( response, "calib 1\r\n" );
   telnetCommand( response, "cal\r\n" );
 
   telnetCommand( response, "trans 4\r\n" );
-  telnetCommand( response, "calib 3\r\n" );
+  telnetCommand( response, "calib 1\r\n" );
   telnetCommand( response, "cal\r\n" );
 
   telnetCommand( response, "trans 5\r\n" );
-  telnetCommand( response, "calib 3\r\n" );
+  telnetCommand( response, "calib 1\r\n" );
   telnetCommand( response, "cal\r\n" );
 
   telnetCommand( response, "xpwr on\r\n" );
 
   telnetCommand( response, "rate 125 16\r\n" );
   // telnetCommand( response, "filter 1 \n" );
+
+
+
 
   ROS_ERROR( "Connecting to UDP now..." );
   status = udpConnect( "192.168.104.107", 49152 );
