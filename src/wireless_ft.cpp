@@ -886,7 +886,7 @@ void WirelessFT::run() {
   telnetCommand( response, "xpwr off\r\n" );
     usleep( 0.2*1000*1000 );
 
-  telnetCommand( response, "bias 2 on");
+  telnetCommand( response, "bias 2 on\r\n");
     usleep( 0.2*1000*1000 );
 
 
