@@ -48,6 +48,7 @@
 #include <ros/ros.h>
 #include <sensor_msgs/Joy.h>  // buttons: channel on/off, axes: sensor counts
 #include <geometry_msgs/WrenchStamped.h>
+#include <std_srvs/Empty.h>
 
 
 // conversion factors, see WirelessFTSensorPanel.java
@@ -274,6 +275,8 @@ class WirelessFT {
     unsigned short crcBuf( char* buff, int len );
     unsigned short crcByte( unsigned short crc, char ch );
 
+    bool serviceCallback( std_srvs::Empty::Request &req, std_srvs::Empty::Response &res );
+
     // double sensor_counts[NUMBER_OF_TRANSDUCERS][NUMBER_OF_STRAIN_GAGES];
     Eigen::MatrixXd  sensor_counts;
     std::vector<WirelessFTCalibration> factory_calibrations;
@@ -286,6 +289,7 @@ class WirelessFT {
     ros::Publisher    wrench_4_publisher;
     ros::Publisher    wrench_5_publisher;
     ros::Publisher    wrench_6_publisher;
+    ros::ServiceServer reset_bias_service_;
 
     int n_channels;
 
@@ -377,6 +381,9 @@ WirelessFT::WirelessFT() :
   wrench_3_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "/wireless_ft/wrench_3", 1 );
   wrench_4_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "/wireless_ft/wrench_4", 1 );
   wrench_5_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "/wireless_ft/wrench_5", 1 );
+
+  // services
+  reset_bias_service_ = nh.advertiseService("wireless_ft/reset_bias", &WirelessFT::serviceCallback, this);
 }
 
 
@@ -851,6 +858,11 @@ int WirelessFT::readDataPacket()
 }
 
 
+bool WirelessFT::serviceCallback( std_srvs::Empty::Request &req, std_srvs::Empty::Response &res ) {
+  std::string response;
+  telnetCommand( response, "bias 3 on\r\n");
+    usleep( 0.2*1000*1000 );
+}
 
 
 void WirelessFT::run() {
