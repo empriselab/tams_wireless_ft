@@ -17,10 +17,12 @@
 
     <param name="rate" value="125" />
     <param name="oversample" value="32" />
-    <param name="n_sensors" value="5" />
+    <param name="active_channels" value="12345" type="string" />
 
     <param name="reference_frame" value="world" />
     <param name="tf_prefix" value="wireless_ft_" />
+
+    <param name="verbose" value="1" />
   </node>
 
 
