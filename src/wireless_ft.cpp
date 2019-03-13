@@ -48,6 +48,7 @@
 #include <Eigen/Core>
 #include <Eigen/Dense>
 
+#include <csignal>
 #include <sstream>
 
 #include <ros/ros.h>
@@ -1075,18 +1076,38 @@ void WirelessFT::run() {
 
   if (streaming) udpStopStreaming();
   telnetDisconnect();
-
-  exit( 0 );
 }
 
 
 
 void WirelessFT::shutdown() {
   ROS_ERROR( "WirelessFT.shutdown(): IMPLEMENT ME!!!" );
+  if (streaming) udpStopStreaming();
+  telnetDisconnect();
 }
 
 
+static WirelessFT * wireless_ft_ptr;
+
+
+// we want our own handler for graceful reaction to cntl-c:
+// stop streaming and disconnect from the telnet control port.
+//
+void SIGINT_handler(int signal)
+{
+  ROS_ERROR( "tams_wireless_ft: received SIGINT, stopping streaming..." );
+  if (wireless_ft_ptr != NULL) {
+    wireless_ft_ptr->shutdown();
+  }
+  usleep( 1000*1000 );
+  ROS_ERROR( "tams_wireless_ft: exiting now..." );
+  exit( 0 );
+}
+
+
+
 int main( int argc, char ** argv ) {
+  std::signal(SIGINT, SIGINT_handler );
   ros::init( argc, argv, "WirelessFT", 1 ); // no default cntl-c handler
   ros::AsyncSpinner spinner( 2 ); 
   spinner.start();
