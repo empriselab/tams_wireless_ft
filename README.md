@@ -19,7 +19,7 @@ and 16.04 LTS, but should work on newer versions as well.
   plus one or more of the ATi force/torque transducers
   (https://www.ati-ia.com/products/ft/sensors.aspx).
 
-* Clone this repository into your catkin workspace and run ```catkin_make'''.
+* Clone this repository into your catkin workspace and run `catkin_make`.
 
 
 ## Running the software
@@ -32,11 +32,11 @@ and 16.04 LTS, but should work on newer versions as well.
 
 * Switch on your Wirelss F/T system and launch your node.
   The measured force/torque values are published as timestamped
-  ```WrenchStamped''' messages.
+  `WrenchStamped` messages.
 
 * The sensors are typically factory calibrated, but offsets will depend
   on the sensor orientation and static payload. 
-  If necessary, call the ```reset_bias''' service to zero the
+  If necessary, call the `reset_bias` service to zero the
   measurements (currently, all forces/torques for all sensors).
 
 
@@ -49,15 +49,15 @@ and 16.04 LTS, but should work on newer versions as well.
 
 ## What is in here?
 
-'''
-config/             - sample rviz and plotjuggler configuration files
-doc/                - example telnet session for device initialization
-                      and interactive configuration; example raw data.
-launch/             - sample launch files
-scripts/            - utility scripts
-src/wireless_ft.src - the actual driver / ROS node
 
-'''
+    config/             - sample rviz and plotjuggler configuration files
+    doc/                - example telnet session for device initialization
+                          and interactive configuration; example raw data.
+    launch/             - sample launch files
+    scripts/            - utility scripts
+    src/wireless_ft.src - the actual driver / ROS node
+
+
 
 
 
