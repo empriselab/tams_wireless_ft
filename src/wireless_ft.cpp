@@ -17,18 +17,18 @@
  * to reconnect.
  *
  * TODO:
- * - implement
  * - use rosparam to set/read the calibration matrices
  * - provide gravity-compensation for tools mounted on the sensors
+ * - clean-up the Calibration class.
  *
+ * 2019.03.26 - github upload
+ * 2019.03.13 - add cntl-c handler
  * 2018.03.12 - merge "reset_bias" service pull request
  * 2018.03.12 - implement "channels" node parameter
- * 2017.09.xx - getWrench returns sensor readings in N and Nm (after bias reset, Stephan)
- * 2017.09.xx - ATI Java demo program works no on Linux (Stephan)
+ * 2017.05.22 - getWrench returns sensor readings in N and Nm (after bias reset, Stephan)
  * 2017.03.16 - created (from scratch / datasheet)
- * 2017.03.15 - checked that the  ATi Java demo program won't run on Linux...
  *
- * (C) 2017, fnh, hendrich@informatik.uni-hamburg.de
+ * (C) 2017, 2018, 2019, fnh, hendrich@informatik.uni-hamburg.de
  */
 
 
@@ -155,6 +155,12 @@ static bool debug = false;
 /** 
  * WirelessFTCalibration: helper class to store and manage
  * calibration of the ATi force/torque transducers.
+ *
+ * Note: as the raw counts returned from the Wireless F/T system
+ * turned out to be (factory-) calibrated, we currently bypass
+ * all our own custom calibration code. Instead, getWrench just
+ * returns the sensor counts rescaled to Newton and Newtonmeter
+ * as expected by ROS.
  */
 class WirelessFTCalibration {
   public:
@@ -796,7 +802,7 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
   }
 
   int pos = 18;
-  for( int t=0; t < 5; t++ ) {
+  for( int t=0; t < 6; t++ ) {
     if (verbose > 2) {
       printf( "transducer %d   %8d  %8d  %8d    %8d  %8d  %8d\n",
               (t+1),
@@ -825,8 +831,8 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
   joy.header.stamp    = ros::Time::now();
   joy.header.frame_id = "Wireless FT";
   joy.header.seq      = seq;
-  joy.axes.resize( 5*NUMBER_OF_STRAIN_GAGES ); // FIXME
-  for( int t=0; t < 5; t++ ) {
+  joy.axes.resize( 6*NUMBER_OF_STRAIN_GAGES ); // six channels on Wireless F/T
+  for( int t=0; t < 6; t++ ) {
     for( int g=0; g < NUMBER_OF_STRAIN_GAGES; g++ ) {
       joy.axes[ t*6+g ] = sensor_counts(t,g);
     }
@@ -928,7 +934,6 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
     wrench6.wrench.torque.z = w6(5);
     wrench_6_publisher.publish( wrench6 );
   }
-
 }
 
 
