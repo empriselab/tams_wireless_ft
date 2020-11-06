@@ -268,11 +268,11 @@ class WirelessFT {
     WirelessFT();
     ~WirelessFT();
 
-    int  telnetConnect( std::string hostname, int port );
+    int  telnetConnect();
     int  telnetDisconnect();
     int  telnetCommand( std::string & response, std::string command, unsigned int micros );
 
-    int  udpConnect( std::string hostname, int port );
+    int  udpConnect();
     int  udpStartStreaming();
     int  udpStopStreaming();
     int  udpPing();
@@ -310,7 +310,9 @@ class WirelessFT {
     int verbose; // 0=silent, 1..
 
     // networking stuff
-    std::string hostname;
+    std::string localHostname;
+    int telnetPort;
+    int udpPort;
     int telnetSocket; // port 23 aka telnet
     int udpSocket;    // port 49152 for data streaming
     bool streaming;
@@ -338,6 +340,12 @@ WirelessFT::WirelessFT() :
   nnh.param( "active_channels", token, std::string( "123456" ));
   ROS_ERROR( "param active_channels: got %s", token.c_str() );
 
+  nnh.param( "ip_address", localHostname, std::string( "192.168.0.123") );
+
+  nnh.param( "telnet_port", telnetPort, 23 );
+  nnh.param( "udp_port", udpPort, 49152 );
+
+  ROS_ERROR( "connecting to %s:%d udp, telnet port: %d", localHostname.c_str(), udpPort, telnetPort );
 
   active_channels_mask = 0x0; 
   for( int i=0; i < 6; i++ ) {
@@ -443,29 +451,29 @@ WirelessFT::~WirelessFT() {
  * given IP-address (e.g. 192.168.104.107) and port (typically 23).
  * Returns 0 on success, -1 on error.
  */
-int WirelessFT::telnetConnect( std::string hostname, int port ) {
+int WirelessFT::telnetConnect() {
   telnetSocket = socket( AF_INET, SOCK_STREAM, 0 );
   if (telnetSocket < 0) {
     ROS_ERROR( "WirelessFT: ferror opening client socket" );
     return -1;
   }
 
-  struct hostent *server = gethostbyname( hostname.c_str() );
+  struct hostent *server = gethostbyname( localHostname.c_str() );
   if (server == NULL) {
-    ROS_ERROR( "WirelessFT: no such host: '%s'", hostname.c_str() );
+    ROS_ERROR( "WirelessFT: no such host: '%s'", localHostname.c_str() );
     exit( -1 );
   }
 
   struct sockaddr_in serv_addr;
   bzero((char *) &serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
-  serv_addr.sin_port = htons( port );
+  serv_addr.sin_port = htons( telnetPort );
   bcopy( (char*) server->h_addr,
          (char*) &serv_addr.sin_addr.s_addr,
          server->h_length );
 
   if (connect( telnetSocket, (sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-    ROS_ERROR( "WirelessFT: error connecting to socket at host '%s' port '%d'", hostname.c_str(), port );
+    ROS_ERROR( "WirelessFT: error connecting to socket at host '%s' port '%d'", localHostname.c_str(), telnetPort );
     exit( -1 );
   }
 
@@ -559,7 +567,7 @@ int WirelessFT::telnetCommand( std::string & response, std::string cmd, unsigned
  * given IP-address (e.g. 192.168.104.107) and port 49152.
  * Returns 0 on success, -1 on error.
  */
-int WirelessFT::udpConnect( std::string hostname, int udp_port ) {
+int WirelessFT::udpConnect() {
   udpSocket = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (udpSocket < 0) {
     ROS_ERROR( "WirelessFT: ferror creating UDP client socket" );
@@ -581,22 +589,22 @@ int WirelessFT::udpConnect( std::string hostname, int udp_port ) {
   }}
 */
 
-  struct hostent *server = gethostbyname( hostname.c_str() );
+  struct hostent *server = gethostbyname( localHostname.c_str() );
   if (server == NULL) {
-    ROS_ERROR( "WirelessFT: no such host: '%s'", hostname.c_str() );
+    ROS_ERROR( "WirelessFT: no such host: '%s'", localHostname.c_str() );
     exit( -1 );
   }
 
   struct sockaddr_in serv_addr;
   bzero((char *) &serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
-  serv_addr.sin_port = htons( udp_port );
+  serv_addr.sin_port = htons( udpPort );
   bcopy( (char*) server->h_addr,
          (char*) &serv_addr.sin_addr.s_addr,
          server->h_length );
 
   if (connect( udpSocket, (sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-    ROS_ERROR( "WirelessFT: error connecting to socket at host '%s' port '%d'", hostname.c_str(), udp_port);
+    ROS_ERROR( "WirelessFT: error connecting to socket at host '%s' port '%d'", localHostname.c_str(), udpPort);
     exit( -1 );
   }
 
@@ -977,8 +985,8 @@ void WirelessFT::run() {
 
   // TODO: refactor into configure() method...
   std::string response;
-  int status = telnetConnect( "192.168.104.107", 23 );
-  if (status == 0) ROS_INFO( "Connected to Wireless FT at port 23..." );
+  int status = telnetConnect();
+  if (status == 0) ROS_INFO( "Connected to Wireless FT..." );
   else ROS_ERROR( "Failure to connect." );
   usleep( 3*1000*1000 );
   // telnetCommand( response, " \r\n" );
@@ -1054,7 +1062,7 @@ void WirelessFT::run() {
 
 
   ROS_ERROR( "Connecting to UDP now..." );
-  status = udpConnect( "192.168.104.107", 49152 );
+  status = udpConnect();
   if (status == 0) ROS_INFO( "Connected at port 49152..." );
 
   udpStartStreaming(); // send start streaming
