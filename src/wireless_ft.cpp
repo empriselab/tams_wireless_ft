@@ -1,17 +1,17 @@
 /* wireless_ft.cpp - ROS driver for the ATi Wireless F/T system
  *
- * When started, the node first connects to the Wireless F/T 
+ * When started, the node first connects to the Wireless F/T
  * at the given hostname/IP-address via telnet (port 23)
  * and configures the device parameters, including active
  * transducers, rate, filtering, and power settings.
  * Once this finished, we open the second UDP port (49152)
  * and start the ROS loop that periodically reads incoming
  * UDP packets. We then send the UDP command to start data
- * streaming. 
+ * streaming.
 
- * Incoming data is published both as raw values and converted 
- * into WrenchStamped via the factory calibration matrices 
- * provided by ATi/Schunk. 
+ * Incoming data is published both as raw values and converted
+ * into WrenchStamped via the factory calibration matrices
+ * provided by ATi/Schunk.
  *
  * If the number of dropped packets grows too large, we try
  * to reconnect.
@@ -58,7 +58,7 @@
 
 
 // conversion factors, see WirelessFTSensorPanel.java
-// 
+//
 #define CONVERT_FORCE_POUND_LBF           1.0;
 #define CONVERT_FORCE_KILOPOUND_KLBF   1000.0;
 #define CONVERT_FORCE_NEWTON_N            4.448222;
@@ -75,13 +75,13 @@
 
 
 // UDP data packet definition
-// 
+//
 #define NUMBER_OF_ANALOG_BOARDS                2
 #define NUMBER_OF_TRANSDUCERS                  6
 #define NUMBER_OF_STRAIN_GAGES                 6
 
 /*
-struct TxPacket_S 
+struct TxPacket_S
 {
   unsigned long timeStamp;    // UTC
   unsigned long sequence;
@@ -152,7 +152,7 @@ static pthread_mutex_t mutex;
 static bool debug = false;
 
 
-/** 
+/**
  * WirelessFTCalibration: helper class to store and manage
  * calibration of the ATi force/torque transducers.
  *
@@ -184,8 +184,8 @@ class WirelessFTCalibration {
 };
 
 
-WirelessFTCalibration::WirelessFTCalibration( std::string transducerName, 
-                                              std::string calibrationName, 
+WirelessFTCalibration::WirelessFTCalibration( std::string transducerName,
+                                              std::string calibrationName,
                                               int verbose ):
   NG( 6 ), gains( 6 ), offsets( 6 ), calibration( 6, 6 ), verbose( verbose ),
   transducerName( transducerName ),
@@ -198,14 +198,14 @@ WirelessFTCalibration::WirelessFTCalibration( std::string transducerName,
 }
 
 /**
-* @param: counts in N and Nm force units * 1 000 000 
+* @param: counts in N and Nm force units * 1 000 000
 * return: force values in N and torque values in Nm
 */
 
 Eigen::VectorXd WirelessFTCalibration::getWrench( Eigen::VectorXd counts ) {
   if (verbose > 2) std::cout << "getWrench(" << transducerName << "," << calibrationName << "):" << "\n";
   Eigen::VectorXd    valuesF = counts / 1000000; // N
-  Eigen::VectorXd    valuesT = (counts / 1000000) / 1000; //Nmm to Nm
+  Eigen::VectorXd    valuesT = (counts / 1000000); //Nmm to Nm
   Eigen::VectorXd    valuesFT(6);
 
   valuesFT << valuesF[0], valuesF[1], valuesF[2], valuesT[3], valuesT[4], valuesT[5];
@@ -214,7 +214,7 @@ Eigen::VectorXd WirelessFTCalibration::getWrench( Eigen::VectorXd counts ) {
 }
 
 
-void WirelessFTCalibration::parseGains( std::string tokens ) { 
+void WirelessFTCalibration::parseGains( std::string tokens ) {
   std::stringstream ss;
   ss << tokens;
   for( int i=0; i < NG; i++ ) {
@@ -238,7 +238,7 @@ void WirelessFTCalibration::parseOffsets( std::string tokens ) {
 }
 
 
-void WirelessFTCalibration::parseCalibration( std::string tokens ) { 
+void WirelessFTCalibration::parseCalibration( std::string tokens ) {
   std::stringstream ss;
   ss << tokens;
   for( int i=0; i < 6; i++ ) { // Fx Fy Fz Tx Ty Tz
@@ -252,7 +252,7 @@ void WirelessFTCalibration::parseCalibration( std::string tokens ) {
 }
 
 
-void WirelessFTCalibration::parseYaml( std::string paramName) { 
+void WirelessFTCalibration::parseYaml( std::string paramName) {
   ROS_ERROR( "WirelessFTCalibration::parseYaml: IMPLEMENT ME!!!" );
 }
 
@@ -336,7 +336,7 @@ WirelessFT::WirelessFT() :
   nnh.param( "verbose", verbose, 1 );
   ROS_ERROR( "verbose level is %d", verbose );
 
-  std::string token; 
+  std::string token;
   nnh.param( "active_channels", token, std::string( "123456" ));
   ROS_ERROR( "param active_channels: got %s", token.c_str() );
 
@@ -347,18 +347,18 @@ WirelessFT::WirelessFT() :
 
   ROS_ERROR( "connecting to %s:%d udp, telnet port: %d", localHostname.c_str(), udpPort, telnetPort );
 
-  active_channels_mask = 0x0; 
+  active_channels_mask = 0x0;
   for( int i=0; i < 6; i++ ) {
     const char* found = strchr( token.c_str(), '0'+i+1 );
     // ROS_ERROR( "index %d found %p", i, found );
-    if (found != NULL) active_channels_mask  |= (1 << i); 
+    if (found != NULL) active_channels_mask  |= (1 << i);
     else               active_channels_mask  &= (0x3F ^ (1 << i));
     // ROS_ERROR( "active channels mask is %d", active_channels_mask );
   }
   if (verbose > 0) ROS_ERROR( "active channels mask is %d", active_channels_mask );
 
- 
-  // TODO xxxzzz: read node params 
+
+  // TODO xxxzzz: read node params
 
   // calibration stuff
   //
@@ -366,8 +366,8 @@ WirelessFT::WirelessFT() :
   // WirelessFTCalibration cal1( "T1", "CALIB_1", verbose );
   // cal1.parseGains( "574 594 618 650 602 586" );
   // cal1.parseOffsets( "0 0 0 0 0 0" );
-  // cal1.parseCalibration( 
-  //     "-1.840735  14.82621  24.62213 -504.6677 -41.82769  517.6721 " 
+  // cal1.parseCalibration(
+  //     "-1.840735  14.82621  24.62213 -504.6677 -41.82769  517.6721 "
   //     " -28.2255  612.1705  8.692911  -272.207  29.95003 -315.0209 "
   //     " 600.7707 -1.183056  566.2838   20.7928  567.9268  18.35527 "
   //     "-222.2077  3693.643  3252.839 -1542.229 -2947.771 -1979.439 "
@@ -377,38 +377,38 @@ WirelessFT::WirelessFT() :
   // WirelessFTCalibration cal2( "T2", "CALIB_1", verbose );
   // cal2.parseGains( "598 622 638 650 614 602" );
   // cal2.parseOffsets( "31087 32019 29522 31190 28980 30852" );
-  // cal2.parseCalibration( 
+  // cal2.parseCalibration(
   //     "0.6105832  11.82515 -27.75596 -517.7919  28.04681  531.0735 "
-  //     " 25.59246  616.7253 -14.80488 -284.2845 -18.88448 -315.8253 " 
+  //     " 25.59246  616.7253 -14.80488 -284.2845 -18.88448 -315.8253 "
   //     " 593.0466  14.84871  558.9457 -10.66256  562.8641  10.35539 "
   //     " 130.5689  3726.847  3047.324 -1787.495 -3209.956 -1953.829 "
   //     "-3797.911 -156.7664   1916.83  3090.215  1702.124 -3183.832 "
-  //     " 104.3058  2344.414  130.2406  2179.418  109.7938   2272.98 " ); 
-    
+  //     " 104.3058  2344.414  130.2406  2179.418  109.7938   2272.98 " );
+
   // WirelessFTCalibration cal3( "T3", "CALIB_1", verbose );
   // cal3.parseGains( "618 650 638 638 686 706" );
   // cal3.parseOffsets( "29906 31020 29168 30516 28134 30628" );
-  // cal3.parseCalibration( 
+  // cal3.parseCalibration(
   //     "0.5407506 -11.06681  603.3965  -109.276 -3841.928  -39.5272 "
-  //     "-10.44727  616.4824  25.85361  3717.271 -104.0906  2258.229 " 
+  //     "-10.44727  616.4824  25.85361  3717.271 -104.0906  2258.229 "
   //     " 29.16257  17.27281  568.6636  3233.831  1654.897 -136.5534 "
   //     "-532.5557 -309.5431  6.927393 -1816.022  3245.616  2312.379 "
   //     "-27.62092  14.28631  549.3841 -3022.306  1944.764 -101.4407 "
-  //     " 501.5891 -292.6168  24.70506  -1906.68 -2954.505    2185.1 " ); 
+  //     " 501.5891 -292.6168  24.70506  -1906.68 -2954.505    2185.1 " );
 
 
   // CALIBRATION INFO FOR Mini 45 FT30835
   WirelessFTCalibration cal3( "T3", "CALIB_1", verbose );
   cal3.parseGains( "774 806 802 798 806 810" );
   cal3.parseOffsets( "30344 32009 31090 30444 30748 31980" );
-  cal3.parseCalibration( 
+  cal3.parseCalibration(
       " 30.8075377269387 1.2893008157985 813.569688708002 -7254.89791700611 -787.595279064185 7104.39474007346  "
-      " -871.782540620028 8324.75261230435 539.573226128255 -4190.17786942629 305.143608475913 -4103.53338191159 " 
+      " -871.782540620028 8324.75261230435 539.573226128255 -4190.17786942629 305.143608475913 -4103.53338191159 "
       " 10394.2105970546 387.126558109331 10287.5435837209 545.14516888845 9983.94635516981 648.901079941133 "
       " -7.09817753535296 58.629315710162 -157.956380580148 -37.7281831894694 161.827405736171 -19.0197000158304 "
       " 195.846997398986 6.4510344807947 -101.436603140553 46.4263739657068 -89.6654792534856 -55.793052288557 "
-      " 12.089642172249 -106.169056621114 9.8490093249083 -107.484272257137 12.0232903778477 -104.766830359676 " ); 
-  
+      " 12.089642172249 -106.169056621114 9.8490093249083 -107.484272257137 12.0232903778477 -104.766830359676 " );
+
   WirelessFTCalibration cal4( "T4", "CALIB_1", verbose );
   WirelessFTCalibration cal5( "T5", "CALIB_1", verbose );
   WirelessFTCalibration cal6( "T6", "CALIB_1", verbose );
@@ -434,17 +434,17 @@ WirelessFT::WirelessFT() :
   // publishers
   raw_sensor_counts_publisher = nh.advertise<sensor_msgs::Joy>( "wireless_ft/raw_sensor_counts", 1 );
 
-  if (active_channels_mask & 0x01) 
+  if (active_channels_mask & 0x01)
     wrench_1_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_1", 1 );
-  if (active_channels_mask & 0x02) 
+  if (active_channels_mask & 0x02)
     wrench_2_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_2", 1 );
-  if (active_channels_mask & 0x04) 
+  if (active_channels_mask & 0x04)
     wrench_3_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_3", 1 );
-  if (active_channels_mask & 0x08) 
+  if (active_channels_mask & 0x08)
     wrench_4_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_4", 1 );
-  if (active_channels_mask & 0x10) 
+  if (active_channels_mask & 0x10)
     wrench_5_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_5", 1 );
-  if (active_channels_mask & 0x20) 
+  if (active_channels_mask & 0x20)
     wrench_6_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_6", 1 );
 
   // services
@@ -460,7 +460,7 @@ WirelessFT::~WirelessFT() {
 
 
 /**
- * tries to connect to the Wireless F/T controller using the 
+ * tries to connect to the Wireless F/T controller using the
  * given IP-address (e.g. 192.168.104.107) and port (typically 23).
  * Returns 0 on success, -1 on error.
  */
@@ -576,7 +576,7 @@ int WirelessFT::telnetCommand( std::string & response, std::string cmd, unsigned
 
 
 /**
- * tries to connect to the Wireless F/T controller using the 
+ * tries to connect to the Wireless F/T controller using the
  * given IP-address (e.g. 192.168.104.107) and port 49152.
  * Returns 0 on success, -1 on error.
  */
@@ -586,15 +586,15 @@ int WirelessFT::udpConnect() {
     ROS_ERROR( "WirelessFT: ferror creating UDP client socket" );
     return -1;
   }
-  
-/*  
+
+/*
   // zero out the structure
   memset((char *) &si_me, 0, sizeof(si_me));
-  
+
   si_me.sin_family = AF_INET;
   si_me.sin_port = htons(PORT);
   si_me.sin_addr.s_addr = htonl(INADDR_ANY);
-  
+
   //bind socket to port
   if( bind(s , (struct sockaddr*)&si_me, sizeof(si_me) ) == -1)
   {
@@ -629,9 +629,9 @@ int WirelessFT::udpConnect() {
  * CRC checksum calculation, converted from ATi's crc.java
  * @author Sam Skuce
  */
-unsigned short WirelessFT::crcByte( unsigned short crc, char ch ) 
+unsigned short WirelessFT::crcByte( unsigned short crc, char ch )
 {
-        static int ccitt_crc16_table[32*8] = 
+        static int ccitt_crc16_table[32*8] =
         {
             0x0000, 0x1021, 0x2042, 0x3063, 0x4084, 0x50a5, 0x60c6, 0x70e7,
             0x8108, 0x9129, 0xa14a, 0xb16b, 0xc18c, 0xd1ad, 0xe1ce, 0xf1ef,
@@ -675,7 +675,7 @@ unsigned short WirelessFT::crcBuf( char* buff, int len )
   int i;
   short crc = 0x1234; // CRC seed.
 
-  for (i = 0; i < len; i++) 
+  for (i = 0; i < len; i++)
   {
     crc = crcByte(crc, buff[i]);
   }
@@ -683,7 +683,7 @@ unsigned short WirelessFT::crcBuf( char* buff, int len )
 }
 
 
-int WirelessFT::udpStartStreaming() 
+int WirelessFT::udpStartStreaming()
 {
   ROS_ERROR( "udpStartStreaming: IMPLEMENT ME!!!" );
   // bytes  start streaming:
@@ -691,7 +691,7 @@ int WirelessFT::udpStartStreaming()
   //  1     sequence number, 0,1,2,...255,0,...
   //  1     value 1 = start_streaming_command
   //  4     number_of_packets, 0 for infinite
-  //  2     crc 
+  //  2     crc
 
   char buffer[10];
   buffer[0] = 0;
@@ -713,13 +713,13 @@ int WirelessFT::udpStartStreaming()
 }
 
 
-int WirelessFT::udpStopStreaming() 
+int WirelessFT::udpStopStreaming()
 {
   // bytes  stop streaming:
   //  2     length including crc = 6
   //  1     sequence number, 0,1,2,...255,0,...
   //  1     value 1 = start_streaming_command
-  //  2     crc 
+  //  2     crc
 
   char buffer[6];
   buffer[0] = 0;
@@ -737,13 +737,13 @@ int WirelessFT::udpStopStreaming()
 }
 
 
-int WirelessFT::udpPing() 
+int WirelessFT::udpPing()
 {
   // bytes  ping:
   //  2     length including crc = 6
   //  1     sequence number, 0,1,2,...255,0,...
   //  1     value 4 = ping
-  //  2     crc 
+  //  2     crc
 
   char buffer[6];
   buffer[0] = 0;
@@ -761,13 +761,13 @@ int WirelessFT::udpPing()
 }
 
 
-int WirelessFT::udpResetTelnetSocket() 
+int WirelessFT::udpResetTelnetSocket()
 {
   // bytes  reset telnet socket:
   //  2     length including crc = 6
   //  1     sequence number, 0,1,2,...255,0,...
   //  1     value 5 = reset telnet socket
-  //  2     crc 
+  //  2     crc
 
   char buffer[6];
   buffer[0] = 0;
@@ -827,11 +827,11 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
     if (verbose > 2) {
       printf( "transducer %d   %8d  %8d  %8d    %8d  %8d  %8d\n",
               (t+1),
-              parseInteger( buffer, pos+0 ), 
-              parseInteger( buffer, pos+4 ), 
-              parseInteger( buffer, pos+8 ), 
-              parseInteger( buffer, pos+12 ), 
-              parseInteger( buffer, pos+16 ), 
+              parseInteger( buffer, pos+0 ),
+              parseInteger( buffer, pos+4 ),
+              parseInteger( buffer, pos+8 ),
+              parseInteger( buffer, pos+12 ),
+              parseInteger( buffer, pos+16 ),
               parseInteger( buffer, pos+20 ) );
     }
 
@@ -973,7 +973,7 @@ int WirelessFT::readDataPacket()
     }
     else {
        if (verbose > 2) ROS_INFO( "socket read: got %d bytes.", n );
-       decodeDataPacket( buffer, 140 ); 
+       decodeDataPacket( buffer, 140 );
     }
     return 0;
 }
@@ -1039,6 +1039,10 @@ void WirelessFT::run() {
   telnetCommand( response, "calib 1\r\n" );
   telnetCommand( response, "cal\r\n" );
 
+  telnetCommand( response, "trans 3\r\n" );
+  telnetCommand( response, "calib 1\r\n" );
+  telnetCommand( response, "cal\r\n" );
+
 /*
   telnetCommand( response, "trans 3\r\n" );
   telnetCommand( response, "calib 1\r\n" );
@@ -1083,7 +1087,7 @@ void WirelessFT::run() {
 
   unsigned int iteration = 0;
   unsigned int received = 0;
-  ros::Rate rate( 125 ); 
+  ros::Rate rate( 125 );
   while( ros::ok() ) {
     if (verbose > 1) ROS_INFO( "WirelessFT: iteration %ul received %ul", iteration, received );
     iteration ++;
@@ -1098,7 +1102,7 @@ void WirelessFT::run() {
 
     ros::spinOnce();
     rate.sleep();
-  } 
+  }
 
   if (streaming) udpStopStreaming();
   telnetDisconnect();
@@ -1135,11 +1139,10 @@ void SIGINT_handler(int signal)
 int main( int argc, char ** argv ) {
   std::signal(SIGINT, SIGINT_handler );
   ros::init( argc, argv, "WirelessFT", 1 ); // no default cntl-c handler
-  ros::AsyncSpinner spinner( 2 ); 
+  ros::AsyncSpinner spinner( 2 );
   spinner.start();
 
   WirelessFT wirelessFT;
   wirelessFT.run();
 
 }
-
