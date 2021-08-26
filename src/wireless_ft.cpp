@@ -41,6 +41,7 @@
 #include <netdb.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
@@ -51,10 +52,10 @@
 #include <csignal>
 #include <sstream>
 
-#include <ros/ros.h>
-#include <sensor_msgs/Joy.h>  // buttons: channel on/off, axes: sensor counts
-#include <geometry_msgs/WrenchStamped.h>
-#include <std_srvs/Empty.h>
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joy.hpp>  // buttons: channel on/off, axes: sensor counts
+#include <geometry_msgs/msg/wrench_stamped.hpp>
+#include <std_srvs/srv/empty.hpp>
 
 
 // conversion factors, see WirelessFTSensorPanel.java
@@ -152,6 +153,13 @@ static pthread_mutex_t mutex;
 static bool debug = false;
 
 
+static void set_scheduling(std::thread &th, int policy, int priority) {
+    sch_params.sched_priority = priority;
+    if(pthread_setschedparam(th.native_handle(), policy, &sch_params)) {
+        std::cerr << "Failed to set Thread scheduling : " << std::strerror(errno) << std::endl;
+    }
+}
+
 /**
  * WirelessFTCalibration: helper class to store and manage
  * calibration of the ATi force/torque transducers.
@@ -191,7 +199,7 @@ WirelessFTCalibration::WirelessFTCalibration( std::string transducerName,
   transducerName( transducerName ),
   calibrationName( calibrationName )
 {
-  if (verbose > 0) ROS_INFO( "WirelessFTCalibration::<init>..." );
+  if (verbose > 0) RCLCPP_INFO(this->get_logger(),  "WirelessFTCalibration::<init>..." );
   gains.setOnes();
   offsets.setZero();
   calibration.setIdentity();
@@ -220,7 +228,7 @@ void WirelessFTCalibration::parseGains( std::string tokens ) {
   for( int i=0; i < NG; i++ ) {
     double value = 0.0;
     ss >> value;
-    gains( i ) = value;
+    gains( ioffsets ) = value;
   }
   if (verbose > 2) std::cout << "parseGains(" << transducerName << "," << calibrationName << "):\n" << gains << "\n";
 }
@@ -232,7 +240,7 @@ void WirelessFTCalibration::parseOffsets( std::string tokens ) {
   for( int i=0; i < NG; i++ ) {
     double value = 0.0;
     ss >> value;
-    offsets( i ) = value;
+    ( i ) = value;
   }
   if (verbose > 2) std::cout << "parseOffsets(" << transducerName << "," << calibrationName << "):\n" << offsets << "\n";
 }
@@ -253,7 +261,7 @@ void WirelessFTCalibration::parseCalibration( std::string tokens ) {
 
 
 void WirelessFTCalibration::parseYaml( std::string paramName) {
-  ROS_ERROR( "WirelessFTCalibration::parseYaml: IMPLEMENT ME!!!" );
+  RCLCPP_ERROR(this->get_logger(),  "WirelessFTCalibration::parseYaml: IMPLEMENT ME!!!" );
 }
 
 
@@ -261,9 +269,9 @@ void WirelessFTCalibration::parseYaml( std::string paramName) {
 
 
 /**
- * WirelessFT: ROS C++ driver for the ATi Wireless F/T system.
+ * WirelessFT: ROS2 C++ driver for the ATi Wireless F/T system.
  */
-class WirelessFT {
+class WirelessFT: public rclcpp::Node {
   public:
     WirelessFT();
     ~WirelessFT();
@@ -278,9 +286,15 @@ class WirelessFT {
     int  udpPing();
     int  udpResetTelnetSocket();
 
+    // called by run()
     int  readDataPacket();
+    // called by run()
     int  decodeDataPacket( char* buffer, unsigned int n_bytes );
+    // reads from the socket
     void run();
+    // publishes based on a timer
+    void timed_publish();
+
     void shutdown();
 
 
@@ -294,17 +308,18 @@ class WirelessFT {
     // double sensor_counts[NUMBER_OF_TRANSDUCERS][NUMBER_OF_STRAIN_GAGES];
     Eigen::MatrixXd  sensor_counts;
     std::vector<WirelessFTCalibration> factory_calibrations;
+    int seq_;
+    rclcpp::Time msg_time_;
 
-    ros::NodeHandle     nh;
-    ros::Publisher      raw_sensor_counts_publisher;
-    ros::Publisher      wrench_1_publisher;
-    ros::Publisher      wrench_2_publisher;
-    ros::Publisher      wrench_3_publisher;
-    ros::Publisher      wrench_4_publisher;
-    ros::Publisher      wrench_5_publisher;
-    ros::Publisher      wrench_6_publisher;
-    ros::ServiceServer  reset_bias_service; // reset/tara bias all channels
-    ros::ServiceServer  command_service;    // text in, text out
+    rclcpp::Publisher<sensor_msgs::msg::Joy>::SharedPtr      raw_sensor_counts_publisher;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr      wrench_1_publisher;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr      wrench_2_publisher;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr      wrench_3_publisher;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr      wrench_4_publisher;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr      wrench_5_publisher;
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr      wrench_6_publisher;
+    rclcpp::Service<std_srvs::srv::Empty>::SharedPtr  reset_bias_service; // reset/tara bias all channels
+    rclcpp::Service<std_srvs::srv::Empty>::SharedPtr  command_service;    // text in, text out
 
     int active_channels_mask; // bit i <=> channel (i+1) active
     int verbose; // 0=silent, 1..
@@ -316,15 +331,18 @@ class WirelessFT {
     int telnetSocket; // port 23 aka telnet
     int udpSocket;    // port 49152 for data streaming
     bool streaming;
+    double publishRate;
+
+    rclcpp::TimerBase::SharedPtr timer_;
 
 }; // end class WirelessFT
 
 
 
-WirelessFT::WirelessFT() :
+WirelessFT::WirelessFT() : Node("wireless_ft"),
   streaming( false ), verbose( 0 )
 {
-  ROS_INFO( "WirelessFT::<init>..." );
+  RCLCPP_INFO(this->get_logger(),  "WirelessFT::<init>..." );
   pthread_mutexattr_t attr;
   pthread_mutexattr_init(&attr);
   pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
@@ -332,37 +350,36 @@ WirelessFT::WirelessFT() :
 
   char  udpCommandSequence = 0;
 
-  ros::NodeHandle nnh( "~" );
-  nnh.param( "verbose", verbose, 1 );
-  ROS_ERROR( "verbose level is %d", verbose );
+  this->declare_parameter<int>("verbose", 1);
+  this->declare_parameter<std::string>("active_channels", "123456");
+  this->declare_parameter<std::string>("ip_address", "192.168.0.123");
+  this->declare_parameter<int>("telnet_port", 23);
+  this->declare_parameter<int>("udp_port", 49152);
+  this->declare_parameter<double>("publish_rate", 1000.);  //Hz
 
+  this->get_parameter("verbose", verbose);
   std::string token;
-  nnh.param( "active_channels", token, std::string( "123456" ));
-  ROS_ERROR( "param active_channels: got %s", token.c_str() );
+  this->get_parameter("active_channels", token);
+  this->get_parameter("ip_address", localHostname);
+  this->get_parameter("telnet_port", telnetPort);
+  this->get_parameter("udp_port", udpPort);
+  this->get_parameter("publish_rate", publishRate);
 
-  nnh.param( "ip_address", localHostname, std::string( "192.168.0.123") );
-
-  nnh.param( "telnet_port", telnetPort, 23 );
-  nnh.param( "udp_port", udpPort, 49152 );
-
-  ROS_ERROR( "connecting to %s:%d udp, telnet port: %d", localHostname.c_str(), udpPort, telnetPort );
+  RCLCPP_ERROR(this->get_logger(),  "verbose level is %d", verbose );
+  RCLCPP_ERROR(this->get_logger(),  "param active_channels: got %s", token.c_str() );
+  RCLCPP_ERROR(this->get_logger(),  "connecting to %s:%d udp, telnet port: %d", localHostname.c_str(), udpPort, telnetPort );
 
   active_channels_mask = 0x0;
   for( int i=0; i < 6; i++ ) {
     const char* found = strchr( token.c_str(), '0'+i+1 );
-    // ROS_ERROR( "index %d found %p", i, found );
+    // RCLCPP_ERROR(this->get_logger(),  "index %d found %p", i, found );
     if (found != NULL) active_channels_mask  |= (1 << i);
     else               active_channels_mask  &= (0x3F ^ (1 << i));
-    // ROS_ERROR( "active channels mask is %d", active_channels_mask );
+    // RCLCPP_ERROR(this->get_logger(),  "active channels mask is %d", active_channels_mask );
   }
-  if (verbose > 0) ROS_ERROR( "active channels mask is %d", active_channels_mask );
+  if (verbose > 0) RCLCPP_ERROR(this->get_logger(),  "active channels mask is %d", active_channels_mask );
+  if (verbose > 0) RCLCPP_INFO(this->get_logger(),  "initializing factory calibration..." );
 
-
-  // TODO xxxzzz: read node params
-
-  // calibration stuff
-  //
-  if (verbose > 0) ROS_INFO( "initializing factory calibration..." );
   // WirelessFTCalibration cal1( "T1", "CALIB_1", verbose );
   // cal1.parseGains( "574 594 618 650 602 586" );
   // cal1.parseOffsets( "0 0 0 0 0 0" );
@@ -396,7 +413,6 @@ WirelessFT::WirelessFT() :
   //     "-27.62092  14.28631  549.3841 -3022.306  1944.764 -101.4407 "
   //     " 501.5891 -292.6168  24.70506  -1906.68 -2954.505    2185.1 " );
 
-
   // CALIBRATION INFO FOR Mini 45 FT30835
   WirelessFTCalibration cal3( "T3", "CALIB_1", verbose );
   cal3.parseGains( "774 806 802 798 806 810" );
@@ -420,8 +436,7 @@ WirelessFT::WirelessFT() :
   factory_calibrations.push_back( cal5 );
   factory_calibrations.push_back( cal6 );
 
-
-  if (verbose > 3) ROS_ERROR( "before sensor_counts" );
+  if (verbose > 3) RCLCPP_ERROR(this->get_logger(),  "before sensor_counts" );
   sensor_counts = Eigen::MatrixXd( NUMBER_OF_TRANSDUCERS, NUMBER_OF_STRAIN_GAGES );
   for( int t=0; t < NUMBER_OF_TRANSDUCERS; t++ ) {
     for( int g=0; g < NUMBER_OF_STRAIN_GAGES; g++ ) {
@@ -429,28 +444,31 @@ WirelessFT::WirelessFT() :
       sensor_counts(t,g) = NAN;
     }
   }
-  if (verbose > 0) ROS_INFO( "sensor_counts initialized..." );
+  if (verbose > 0) RCLCPP_INFO(this->get_logger(),  "sensor_counts initialized..." );
+
+  // this determines the QoS (max 50% more than the publish period)
+  std::chrono::duration<double> deadline_(1.5 / publish_rate);
 
   // publishers
-  raw_sensor_counts_publisher = nh.advertise<sensor_msgs::Joy>( "wireless_ft/raw_sensor_counts", 1 );
+  raw_sensor_counts_publisher = this->create_publisher<sensor_msgs::msg::Joy>( "wireless_ft/raw_sensor_counts", rclcpp::QoS(1).deadline(deadline_) );
 
   if (active_channels_mask & 0x01)
-    wrench_1_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_1", 1 );
+    wrench_1_publisher = this->create_publisher<geometry_msgs::msg::WrenchStamped>( "wireless_ft/wrench_1", rclcpp::QoS(1).deadline(deadline_) );
   if (active_channels_mask & 0x02)
-    wrench_2_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_2", 1 );
+    wrench_2_publisher = this->create_publisher<geometry_msgs::msg::WrenchStamped>( "wireless_ft/wrench_2", rclcpp::QoS(1).deadline(deadline_) );
   if (active_channels_mask & 0x04)
-    wrench_3_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_3", 1 );
+    wrench_3_publisher = this->create_publisher<geometry_msgs::msg::WrenchStamped>( "wireless_ft/wrench_3", rclcpp::QoS(1).deadline(deadline_) );
   if (active_channels_mask & 0x08)
-    wrench_4_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_4", 1 );
+    wrench_4_publisher = this->create_publisher<geometry_msgs::msg::WrenchStamped>( "wireless_ft/wrench_4", rclcpp::QoS(1).deadline(deadline_) );
   if (active_channels_mask & 0x10)
-    wrench_5_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_5", 1 );
+    wrench_5_publisher = this->create_publisher<geometry_msgs::msg::WrenchStamped>( "wireless_ft/wrench_5", rclcpp::QoS(1).deadline(deadline_) );
   if (active_channels_mask & 0x20)
-    wrench_6_publisher = nh.advertise<geometry_msgs::WrenchStamped>( "wireless_ft/wrench_6", 1 );
+    wrench_6_publisher = this->create_publisher<geometry_msgs::msg::WrenchStamped>( "wireless_ft/wrench_6", rclcpp::QoS(1).deadline(deadline_) );
 
-  // services
-  reset_bias_service = nh.advertiseService("wireless_ft/reset_bias", &WirelessFT::serviceCallback, this);
+  // TODO services
+  reset_bias_service = this->create_service<std_srvs::srv::Empty>("wireless_ft/reset_bias", &WirelessFT::serviceCallback, this);
 
-  if (verbose > 0) ROS_INFO( "WirelessFT<init> completed." );
+  if (verbose > 0) RCLCPP_INFO(this->get_logger(),  "WirelessFT<init> completed." );
 }
 
 
@@ -467,13 +485,13 @@ WirelessFT::~WirelessFT() {
 int WirelessFT::telnetConnect() {
   telnetSocket = socket( AF_INET, SOCK_STREAM, 0 );
   if (telnetSocket < 0) {
-    ROS_ERROR( "WirelessFT: ferror opening client socket" );
+    RCLCPP_ERROR(this->get_logger(),  "WirelessFT: ferror opening client socket" );
     return -1;
   }
 
   struct hostent *server = gethostbyname( localHostname.c_str() );
   if (server == NULL) {
-    ROS_ERROR( "WirelessFT: no such host: '%s'", localHostname.c_str() );
+    RCLCPP_ERROR(this->get_logger(),  "WirelessFT: no such host: '%s'", localHostname.c_str() );
     exit( -1 );
   }
 
@@ -486,7 +504,7 @@ int WirelessFT::telnetConnect() {
          server->h_length );
 
   if (connect( telnetSocket, (sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-    ROS_ERROR( "WirelessFT: error connecting to socket at host '%s' port '%d'", localHostname.c_str(), telnetPort );
+    RCLCPP_ERROR(this->get_logger(),  "WirelessFT: error connecting to socket at host '%s' port '%d'", localHostname.c_str(), telnetPort );
     exit( -1 );
   }
 
@@ -496,7 +514,7 @@ int WirelessFT::telnetConnect() {
                            TCP_NODELAY,
                            (char*) &nodelay, sizeof(int));
   if (result < 0) {
-     ROS_ERROR( "WirelessFT: failed to set TCP_NODELAY on the socket..." );
+     RCLCPP_ERROR(this->get_logger(),  "WirelessFT: failed to set TCP_NODELAY on the socket..." );
   }
 
   return 0;
@@ -504,7 +522,7 @@ int WirelessFT::telnetConnect() {
 
 
 int WirelessFT::telnetDisconnect() {
-  ROS_INFO( "WirelessFT: telnetDisconnect..." );
+  RCLCPP_INFO(this->get_logger(),  "WirelessFT: telnetDisconnect..." );
   try {
     if (telnetSocket >= 0) {
       ::shutdown( telnetSocket, SHUT_RDWR );
@@ -513,7 +531,7 @@ int WirelessFT::telnetDisconnect() {
     }
   }
   catch( ... ) {
-    ROS_ERROR( "Exception in telnetDisconnect" );
+    RCLCPP_ERROR(this->get_logger(),  "Exception in telnetDisconnect" );
     return -1;
   }
 }
@@ -527,7 +545,7 @@ int WirelessFT::telnetDisconnect() {
  */
 int WirelessFT::telnetCommand( std::string & response, std::string cmd, unsigned int micros=1000 ) {
   try {
-    if (verbose > 2) ROS_INFO( "sending telnet command '%s'", cmd.c_str() );
+    if (verbose > 2) RCLCPP_INFO(this->get_logger(),  "sending telnet command '%s'", cmd.c_str() );
 
     char buffer[2048]; // size is big enough for all documented Wireless FT data packets
     response = "";
@@ -536,12 +554,12 @@ int WirelessFT::telnetCommand( std::string & response, std::string cmd, unsigned
     strncpy( buffer, cmd.c_str(), 2047 );
     n = write( telnetSocket, buffer, strlen(buffer) );
     if (n < 0) {
-       ROS_ERROR( "Error writing to telnet socket." );
+       RCLCPP_ERROR(this->get_logger(),  "Error writing to telnet socket." );
        response = "";
        return -1;
     }
     else {
-       if (verbose > 2) ROS_INFO( "socket write: sent %d bytes, ok.", n );
+       if (verbose > 2) RCLCPP_INFO(this->get_logger(),  "socket write: sent %d bytes, ok.", n );
     }
 
     // sleep a bit to give the device time to respond
@@ -554,20 +572,20 @@ int WirelessFT::telnetCommand( std::string & response, std::string cmd, unsigned
     bzero( buffer, 2048 );
     n = read( telnetSocket, buffer, 2047);
     if (n < 0) {
-       ROS_ERROR( "Error reading from socket" );;
+       RCLCPP_ERROR(this->get_logger(),  "Error reading from socket" );;
        response = "";
        return -1;
     }
     else {
-       if (verbose > 2) ROS_INFO( "socket read: got %d bytes.", n );
+       if (verbose > 2) RCLCPP_INFO(this->get_logger(),  "socket read: got %d bytes.", n );
        response = std::string( buffer );
     }
 
-    if (verbose > 2) ROS_INFO( "response: '%s'", response.c_str() );
+    if (verbose > 2) RCLCPP_INFO(this->get_logger(),  "response: '%s'", response.c_str() );
     return 0;
   }
   catch (...) {
-    ROS_ERROR( "Exception while reading from socket" );;
+    RCLCPP_ERROR(this->get_logger(),  "Exception while reading from socket" );;
     response = "";
     return -1;
   }
@@ -583,7 +601,7 @@ int WirelessFT::telnetCommand( std::string & response, std::string cmd, unsigned
 int WirelessFT::udpConnect() {
   udpSocket = socket( AF_INET, SOCK_DGRAM, IPPROTO_UDP);
   if (udpSocket < 0) {
-    ROS_ERROR( "WirelessFT: ferror creating UDP client socket" );
+    RCLCPP_ERROR(this->get_logger(),  "WirelessFT: ferror creating UDP client socket" );
     return -1;
   }
 
@@ -604,7 +622,7 @@ int WirelessFT::udpConnect() {
 
   struct hostent *server = gethostbyname( localHostname.c_str() );
   if (server == NULL) {
-    ROS_ERROR( "WirelessFT: no such host: '%s'", localHostname.c_str() );
+    RCLCPP_ERROR(this->get_logger(),  "WirelessFT: no such host: '%s'", localHostname.c_str() );
     exit( -1 );
   }
 
@@ -617,7 +635,7 @@ int WirelessFT::udpConnect() {
          server->h_length );
 
   if (connect( udpSocket, (sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-    ROS_ERROR( "WirelessFT: error connecting to socket at host '%s' port '%d'", localHostname.c_str(), udpPort);
+    RCLCPP_ERROR(this->get_logger(),  "WirelessFT: error connecting to socket at host '%s' port '%d'", localHostname.c_str(), udpPort);
     exit( -1 );
   }
 
@@ -685,7 +703,7 @@ unsigned short WirelessFT::crcBuf( char* buff, int len )
 
 int WirelessFT::udpStartStreaming()
 {
-  ROS_ERROR( "udpStartStreaming: IMPLEMENT ME!!!" );
+  RCLCPP_ERROR(this->get_logger(),  "udpStartStreaming: IMPLEMENT ME!!!" );
   // bytes  start streaming:
   //  2     length including crc = 10
   //  1     sequence number, 0,1,2,...255,0,...
@@ -709,7 +727,7 @@ int WirelessFT::udpStartStreaming()
 
   unsigned int length = 10;
   int n = write( udpSocket, buffer, length );
-  ROS_INFO( "udpStartStreaming: wrote %d bytes", n );
+  RCLCPP_INFO(this->get_logger(),  "udpStartStreaming: wrote %d bytes", n );
 }
 
 
@@ -733,7 +751,7 @@ int WirelessFT::udpStopStreaming()
 
   unsigned int length = 6;
   int n = write( udpSocket, buffer, length );
-  ROS_INFO( "udpStopStreaming: wrote %d bytes", n );
+  RCLCPP_INFO(this->get_logger(),  "udpStopStreaming: wrote %d bytes", n );
 }
 
 
@@ -757,7 +775,7 @@ int WirelessFT::udpPing()
 
   unsigned int length = 6;
   int n = write( udpSocket, buffer, length );
-  ROS_INFO( "udpStopStreaming: wrote %d bytes", n );
+  RCLCPP_INFO(this->get_logger(),  "udpStopStreaming: wrote %d bytes", n );
 }
 
 
@@ -781,7 +799,7 @@ int WirelessFT::udpResetTelnetSocket()
 
   unsigned int length = 6;
   int n = write( udpSocket, buffer, length );
-  ROS_INFO( "udpStopStreaming: wrote %d bytes", n );
+  RCLCPP_INFO(this->get_logger(),  "udpStopStreaming: wrote %d bytes", n );
 }
 
 
@@ -798,7 +816,7 @@ int parseInteger( char* buffer, int pos ) {
 
 
 int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
-  if (verbose > 2) ROS_INFO( "decodeDataPacket:" );
+  if (verbose > 2) RCLCPP_INFO(this->get_logger(),  "decodeDataPacket:" );
   char hex[18] = "0123456789ABCDEF_";
 
 
@@ -822,6 +840,8 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
     printf( "mask      %.2x\n", (0x00ff & buffer[17]));
   }
 
+  // READING BUFFER
+  pthread_mutex_lock(&mutex);
   int pos = 18;
   for( int t=0; t < 6; t++ ) {
     if (verbose > 2) {
@@ -846,30 +866,65 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
   }
   if (verbose > 2) printf( "\n\n" );
 
-  int seq = parseInteger( buffer, 4 );
+  // sequence number
+  seq_ = parseInteger( buffer, 4 );
+  // time the message was received
+  msg_time_ = this->get_clock()->now();
+
+  pthread_mutex_unlock(&mutex);
+
+  return 0;
+}
+
+int WirelessFT::timed_publish() {
+  // first read all configs
 
   sensor_msgs::Joy joy;
-  joy.header.stamp    = ros::Time::now();
   joy.header.frame_id = "Wireless FT";
-  joy.header.seq      = seq;
+
+  // convert to Wrench first (locked)
+
+  pthread_mutex_lock(&mutex);
+  
   joy.axes.resize( 6*NUMBER_OF_STRAIN_GAGES ); // six channels on Wireless F/T
   for( int t=0; t < 6; t++ ) {
     for( int g=0; g < NUMBER_OF_STRAIN_GAGES; g++ ) {
       joy.axes[ t*6+g ] = sensor_counts(t,g);
     }
   }
-  raw_sensor_counts_publisher.publish( joy );
 
-  // convert to Wrench
-  Eigen::VectorXd w4 = factory_calibrations[3].getWrench( sensor_counts.row(3) );
-  Eigen::VectorXd w5 = factory_calibrations[4].getWrench( sensor_counts.row(4) );
-  Eigen::VectorXd w6 = factory_calibrations[5].getWrench( sensor_counts.row(5) );
-  // ...
+  int seq      = seq_;
+  rclcpp::Time time_now(msg_time_)
+  Eigen::VectorXd w1, w2, w3, w4, w5, w6;
+  if (active_channels_mask & 0x01) {
+    w1 = factory_calibrations[0].getWrench( sensor_counts.row(0) );
+  }
+  if (active_channels_mask & 0x02) {
+    w2 = factory_calibrations[1].getWrench( sensor_counts.row(1) );
+  }
+  if (active_channels_mask & 0x04) {
+    w3 = factory_calibrations[2].getWrench( sensor_counts.row(2) );
+  }
+  if (active_channels_mask & 0x08) {
+    w4 = factory_calibrations[3].getWrench( sensor_counts.row(3) );
+  }
+  if (active_channels_mask & 0x10) {
+    w5 = factory_calibrations[4].getWrench( sensor_counts.row(4) );
+  }
+  if (active_channels_mask & 0x20) {
+    w6 = factory_calibrations[5].getWrench( sensor_counts.row(5) );
+  pthread_mutex_unlock(&mutex);
+  
+
+  // publishing (not locked)
+
+  joy.header.seq      = seq;
+  joy.header.stamp    = time_now;
+  raw_sensor_counts_publisher->publish( joy );
 
   if (active_channels_mask & 0x01) {
-    Eigen::VectorXd w1 = factory_calibrations[0].getWrench( sensor_counts.row(0) );
-    geometry_msgs::WrenchStamped wrench1;
-    wrench1.header.stamp = ros::Time::now();
+    geometry_msgs::msg::WrenchStamped wrench1;
+    wrench1.header.stamp = time_now;
     wrench1.header.seq   = seq;
     wrench1.header.frame_id = "transducer1";
     wrench1.wrench.force.x  = w1(0);
@@ -878,13 +933,12 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
     wrench1.wrench.torque.x = w1(3);
     wrench1.wrench.torque.y = w1(4);
     wrench1.wrench.torque.z = w1(5);
-    wrench_1_publisher.publish( wrench1 );
+    wrench_1_publisher->publish( wrench1 );
   }
 
   if (active_channels_mask & 0x02) {
-    Eigen::VectorXd w2 = factory_calibrations[1].getWrench( sensor_counts.row(1) );
-    geometry_msgs::WrenchStamped wrench2;
-    wrench2.header.stamp = ros::Time::now();
+    geometry_msgs::msg::WrenchStamped wrench2;
+    wrench2.header.stamp = time_now;
     wrench2.header.seq   = seq;
     wrench2.header.frame_id = "transducer2";
     wrench2.wrench.force.x  = w2(0);
@@ -893,13 +947,12 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
     wrench2.wrench.torque.x = w2(3);
     wrench2.wrench.torque.y = w2(4);
     wrench2.wrench.torque.z = w2(5);
-    wrench_2_publisher.publish( wrench2 );
+    wrench_2_publisher->publish( wrench2 );
   }
 
   if (active_channels_mask & 0x04) {
-    Eigen::VectorXd w3 = factory_calibrations[2].getWrench( sensor_counts.row(2) );
-    geometry_msgs::WrenchStamped wrench3;
-    wrench3.header.stamp = ros::Time::now();
+    geometry_msgs::msg::WrenchStamped wrench3;
+    wrench3.header.stamp = time_now;
     wrench3.header.seq   = seq;
     wrench3.header.frame_id = "transducer3";
     wrench3.wrench.force.x  = w3(0);
@@ -908,13 +961,12 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
     wrench3.wrench.torque.x = w3(3);
     wrench3.wrench.torque.y = w3(4);
     wrench3.wrench.torque.z = w3(5);
-    wrench_3_publisher.publish( wrench3 );
+    wrench_3_publisher->publish( wrench3 );
   }
 
   if (active_channels_mask & 0x08) {
-    Eigen::VectorXd w3 = factory_calibrations[3].getWrench( sensor_counts.row(3) );
-    geometry_msgs::WrenchStamped wrench4;
-    wrench4.header.stamp = ros::Time::now();
+    geometry_msgs::msg::WrenchStamped wrench4;
+    wrench4.header.stamp = time_now;
     wrench4.header.seq   = seq;
     wrench4.header.frame_id = "transducer4";
     wrench4.wrench.force.x  = w4(0);
@@ -923,13 +975,12 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
     wrench4.wrench.torque.x = w4(3);
     wrench4.wrench.torque.y = w4(4);
     wrench4.wrench.torque.z = w4(5);
-    wrench_4_publisher.publish( wrench4 );
+    wrench_4_publisher->publish( wrench4 );
   }
 
   if (active_channels_mask & 0x10) {
-    Eigen::VectorXd w5 = factory_calibrations[4].getWrench( sensor_counts.row(4) );
-    geometry_msgs::WrenchStamped wrench5;
-    wrench5.header.stamp = ros::Time::now();
+    geometry_msgs::msg::WrenchStamped wrench5;
+    wrench5.header.stamp = time_now;
     wrench5.header.seq   = seq;
     wrench5.header.frame_id = "transducer5";
     wrench5.wrench.force.x  = w5(0);
@@ -938,13 +989,12 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
     wrench5.wrench.torque.x = w5(3);
     wrench5.wrench.torque.y = w5(4);
     wrench5.wrench.torque.z = w5(5);
-    wrench_5_publisher.publish( wrench5 );
+    wrench_5_publisher->publish( wrench5 );
   }
 
   if (active_channels_mask & 0x20) {
-    Eigen::VectorXd w6 = factory_calibrations[5].getWrench( sensor_counts.row(5) );
-    geometry_msgs::WrenchStamped wrench6;
-    wrench6.header.stamp = ros::Time::now();
+    geometry_msgs::msg::WrenchStamped wrench6;
+    wrench6.header.stamp = time_now;
     wrench6.header.seq   = seq;
     wrench6.header.frame_id = "transducer6";
     wrench6.wrench.force.x  = w6(0);
@@ -953,7 +1003,7 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
     wrench6.wrench.torque.x = w6(3);
     wrench6.wrench.torque.y = w6(4);
     wrench6.wrench.torque.z = w6(5);
-    wrench_6_publisher.publish( wrench6 );
+    wrench_6_publisher->publish( wrench6 );
   }
 }
 
@@ -968,11 +1018,11 @@ int WirelessFT::readDataPacket()
     // we have 140 bytes...
     int n = read( udpSocket, buffer, 140 );
     if (n < 0) {
-       ROS_ERROR( "Error reading from socket" );;
+       RCLCPP_ERROR(this->get_logger(),  "Error reading from socket" );;
        return -1;
     }
     else {
-       if (verbose > 2) ROS_INFO( "socket read: got %d bytes.", n );
+       if (verbose > 2) RCLCPP_INFO(this->get_logger(),  "socket read: got %d bytes.", n );
        decodeDataPacket( buffer, 140 );
     }
     return 0;
@@ -985,7 +1035,7 @@ int WirelessFT::readDataPacket()
  * "BIAS s1 s2" where s1 = "1,2,3,4,5,6,or*" and s2="ON or OFF".
  * We use "BIAS * ON".
  */
-bool WirelessFT::serviceCallback( std_srvs::Empty::Request &req, std_srvs::Empty::Response &res ) {
+bool WirelessFT::serviceCallback( std::shared_ptr<std_srvs::srv::Empty::Request> req, std::shared_ptr<std_srvs::srv::Empty::Response> res ) {
   std::string response;
   // telnetCommand( response, "bias 3 on\r\n"); // only channel 3
   telnetCommand( response, "bias * on\r\n");
@@ -994,13 +1044,13 @@ bool WirelessFT::serviceCallback( std_srvs::Empty::Request &req, std_srvs::Empty
 
 
 void WirelessFT::run() {
-  ROS_INFO( "WirelessFT::run()..." );
+  RCLCPP_INFO(this->get_logger(),  "WirelessFT::run()..." );
 
   // TODO: refactor into configure() method...
   std::string response;
   int status = telnetConnect();
-  if (status == 0) ROS_INFO( "Connected to Wireless FT..." );
-  else ROS_ERROR( "Failure to connect." );
+  if (status == 0) RCLCPP_INFO(this->get_logger(),  "Connected to Wireless FT..." );
+  else RCLCPP_ERROR(this->get_logger(),  "Failure to connect." );
   usleep( 3*1000*1000 );
   // telnetCommand( response, " \r\n" );
   // usleep( 1*1000*1000 );
@@ -1067,41 +1117,60 @@ void WirelessFT::run() {
     ss << "xpwr " << i << " on\r\n";
     if (active_channels_mask & (1 << i)) {
       telnetCommand( response, ss.str() );
-      ROS_ERROR( "sending XPWR: %s", ss.str().c_str() );
+      RCLCPP_ERROR(this->get_logger(),  "sending XPWR: %s", ss.str().c_str() );
     }
   }
   // telnetCommand( response, "xpwr on\r\n" );
 
-  telnetCommand( response, "rate 125 16\r\n" );
+  // read at the twice the rate needed for publishing
+  int rate = trunc(2 * publish_rate);
+  RCLCPP_ERROR(this->get_logger(),  "sending XPWR: %s", ss.str().c_str() );
+  std::stringstream ss;
+  ss << "rate " << rate << " 16\r\n";
+  telnetCommand( response, ss.str() );
   // telnetCommand( response, "filter 1 \n" );
 
 
-
-
-  ROS_ERROR( "Connecting to UDP now..." );
+  RCLCPP_ERROR(this->get_logger(),  "Connecting to UDP now..." );
   status = udpConnect();
-  if (status == 0) ROS_INFO( "Connected at port 49152..." );
+  if (status == 0) RCLCPP_INFO(this->get_logger(),  "Connected at port 49152..." );
 
   udpStartStreaming(); // send start streaming
   streaming = true;
 
   unsigned int iteration = 0;
   unsigned int received = 0;
-  ros::Rate rate( 125 );
-  while( ros::ok() ) {
-    if (verbose > 1) ROS_INFO( "WirelessFT: iteration %ul received %ul", iteration, received );
+  // reading thread
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_usec = trunc(1000000. / publish_rate) ;  // select timeouts after 2x read period
+
+  while( rclcpp::ok() ) {
+    fd_set rfds;
+    FD_ZERO(&rfds);
+    FD_SET(telnetSocket, &rdfs);
+
+    if (verbose > 1) RCLCPP_INFO(this->get_logger(),  "WirelessFT: iteration %ul received %ul", iteration, received );
     iteration ++;
 
-    try {
-      readDataPacket();
-      received++;
-    }
-    catch( ... ) {
-      ROS_ERROR( "Exception while reading from UDP socket" );
-    }
+    // check what is on the socket
+    int retVal = select(telnetSocket + 1, &rdfs, NULL, NULL, &tv);
 
-    ros::spinOnce();
-    rate.sleep();
+    if (retVal == -1) {
+        RCLCPP_ERROR(this->get_logger(), "Socket closed! terminating");
+        break;
+    } else if (retVal == 0) {
+        RCLCPP_INFO(this->get_logger(), "Select timeout while waiting for f/t data!");
+    } else {
+     try {
+        // read since it's available
+        readDataPacket();
+        received++;
+      }
+      catch( ... ) {
+        RCLCPP_ERROR(this->get_logger(),  "Exception while reading from UDP socket" );
+      }
+    }
   }
 
   if (streaming) udpStopStreaming();
@@ -1111,7 +1180,7 @@ void WirelessFT::run() {
 
 
 void WirelessFT::shutdown() {
-  ROS_ERROR( "WirelessFT.shutdown(): IMPLEMENT ME!!!" );
+  RCLCPP_ERROR(this->get_logger(),  "WirelessFT.shutdown(): IMPLEMENT ME!!!" );
   if (streaming) udpStopStreaming();
   telnetDisconnect();
 }
@@ -1125,12 +1194,12 @@ static WirelessFT * wireless_ft_ptr;
 //
 void SIGINT_handler(int signal)
 {
-  ROS_ERROR( "tams_wireless_ft: received SIGINT, stopping streaming..." );
+  RCLCPP_ERROR(this->get_logger(),  "tams_wireless_ft: received SIGINT, stopping streaming..." );
   if (wireless_ft_ptr != NULL) {
     wireless_ft_ptr->shutdown();
   }
   usleep( 1000*1000 );
-  ROS_ERROR( "tams_wireless_ft: exiting now..." );
+  RCLCPP_ERROR(this->get_logger(),  "tams_wireless_ft: exiting now..." );
   exit( 0 );
 }
 
@@ -1138,11 +1207,20 @@ void SIGINT_handler(int signal)
 
 int main( int argc, char ** argv ) {
   std::signal(SIGINT, SIGINT_handler );
-  ros::init( argc, argv, "WirelessFT", 1 ); // no default cntl-c handler
-  ros::AsyncSpinner spinner( 2 );
-  spinner.start();
+  rclcpp::init(argc, argv); // no default cntl-c handler
 
   WirelessFT wirelessFT;
-  wirelessFT.run();
+  std::thread th1(&WirelessFT::run, wirelessFT);
+  // very high priority reading thread
+  set_scheduling(th1, SCHED_FIFO, 98);
 
+  // high priority ros thread
+  std::thread th2([]() {rclcpp::spin(); } );
+  set_scheduling(th2, SCHED_FIFO, 97);
+
+  th2.join();
+  rclcpp::shutdown();
+
+  // wait for spin to finish
+  th1.join();
 }
