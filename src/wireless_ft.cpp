@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <netdb.h>
 #include <sys/types.h>
@@ -154,10 +155,11 @@ static bool debug = false;
 
 
 static void set_scheduling(std::thread &th, int policy, int priority) {
-    sch_params.sched_priority = priority;
-    if(pthread_setschedparam(th.native_handle(), policy, &sch_params)) {
-        std::cerr << "Failed to set Thread scheduling : " << std::strerror(errno) << std::endl;
-    }
+  struct sched_param sch_params;
+  sch_params.sched_priority = priority;
+  if(pthread_setschedparam(th.native_handle(), policy, &sch_params)) {
+      std::cerr << "Failed to set Thread scheduling : " << std::strerror(errno) << std::endl;
+  }
 }
 
 /**
@@ -199,7 +201,7 @@ WirelessFTCalibration::WirelessFTCalibration( std::string transducerName,
   transducerName( transducerName ),
   calibrationName( calibrationName )
 {
-  if (verbose > 0) RCLCPP_INFO(this->get_logger(),  "WirelessFTCalibration::<init>..." );
+  if (verbose > 0) RCLCPP_INFO(rclcpp::get_logger("rclcpp"),  "WirelessFTCalibration::<init>..." );
   gains.setOnes();
   offsets.setZero();
   calibration.setIdentity();
@@ -228,7 +230,7 @@ void WirelessFTCalibration::parseGains( std::string tokens ) {
   for( int i=0; i < NG; i++ ) {
     double value = 0.0;
     ss >> value;
-    gains( ioffsets ) = value;
+    gains( i ) = value;
   }
   if (verbose > 2) std::cout << "parseGains(" << transducerName << "," << calibrationName << "):\n" << gains << "\n";
 }
@@ -261,7 +263,7 @@ void WirelessFTCalibration::parseCalibration( std::string tokens ) {
 
 
 void WirelessFTCalibration::parseYaml( std::string paramName) {
-  RCLCPP_ERROR(this->get_logger(),  "WirelessFTCalibration::parseYaml: IMPLEMENT ME!!!" );
+  RCLCPP_ERROR(rclcpp::get_logger("rclcpp"),  "WirelessFTCalibration::parseYaml: IMPLEMENT ME!!!" );
 }
 
 
@@ -303,7 +305,7 @@ class WirelessFT: public rclcpp::Node {
     unsigned short crcBuf( char* buff, int len );
     unsigned short crcByte( unsigned short crc, char ch );
 
-    bool serviceCallback( std_srvs::Empty::Request &req, std_srvs::Empty::Response &res );
+    void serviceCallback(const std::shared_ptr<std_srvs::srv::Empty::Request> req, std::shared_ptr<std_srvs::srv::Empty::Response> res );
 
     // double sensor_counts[NUMBER_OF_TRANSDUCERS][NUMBER_OF_STRAIN_GAGES];
     Eigen::MatrixXd  sensor_counts;
@@ -447,7 +449,7 @@ WirelessFT::WirelessFT() : Node("wireless_ft"),
   if (verbose > 0) RCLCPP_INFO(this->get_logger(),  "sensor_counts initialized..." );
 
   // this determines the QoS (max 50% more than the publish period)
-  std::chrono::duration<double> deadline_(1.5 / publish_rate);
+  std::chrono::duration<double> deadline_(1.5 / publishRate);
 
   // publishers
   raw_sensor_counts_publisher = this->create_publisher<sensor_msgs::msg::Joy>( "wireless_ft/raw_sensor_counts", rclcpp::QoS(1).deadline(deadline_) );
@@ -465,8 +467,11 @@ WirelessFT::WirelessFT() : Node("wireless_ft"),
   if (active_channels_mask & 0x20)
     wrench_6_publisher = this->create_publisher<geometry_msgs::msg::WrenchStamped>( "wireless_ft/wrench_6", rclcpp::QoS(1).deadline(deadline_) );
 
+  timer_ = this->create_wall_timer(std::chrono::duration<double>(1. / publishRate), std::bind(&WirelessFT::timed_publish, this));
+
   // TODO services
-  reset_bias_service = this->create_service<std_srvs::srv::Empty>("wireless_ft/reset_bias", &WirelessFT::serviceCallback, this);
+  using namespace std::placeholders;
+  reset_bias_service = this->create_service<std_srvs::srv::Empty>("wireless_ft/reset_bias", std::bind(&WirelessFT::serviceCallback, this, _1, _2));
 
   if (verbose > 0) RCLCPP_INFO(this->get_logger(),  "WirelessFT<init> completed." );
 }
@@ -534,6 +539,7 @@ int WirelessFT::telnetDisconnect() {
     RCLCPP_ERROR(this->get_logger(),  "Exception in telnetDisconnect" );
     return -1;
   }
+  return 0;
 }
 
 
@@ -728,6 +734,7 @@ int WirelessFT::udpStartStreaming()
   unsigned int length = 10;
   int n = write( udpSocket, buffer, length );
   RCLCPP_INFO(this->get_logger(),  "udpStartStreaming: wrote %d bytes", n );
+  return 0;
 }
 
 
@@ -752,6 +759,7 @@ int WirelessFT::udpStopStreaming()
   unsigned int length = 6;
   int n = write( udpSocket, buffer, length );
   RCLCPP_INFO(this->get_logger(),  "udpStopStreaming: wrote %d bytes", n );
+  return 0;
 }
 
 
@@ -776,6 +784,7 @@ int WirelessFT::udpPing()
   unsigned int length = 6;
   int n = write( udpSocket, buffer, length );
   RCLCPP_INFO(this->get_logger(),  "udpStopStreaming: wrote %d bytes", n );
+  return 0;
 }
 
 
@@ -800,6 +809,7 @@ int WirelessFT::udpResetTelnetSocket()
   unsigned int length = 6;
   int n = write( udpSocket, buffer, length );
   RCLCPP_INFO(this->get_logger(),  "udpStopStreaming: wrote %d bytes", n );
+  return 0;
 }
 
 
@@ -876,10 +886,10 @@ int WirelessFT::decodeDataPacket( char* buffer, unsigned int n_bytes ) {
   return 0;
 }
 
-int WirelessFT::timed_publish() {
+void WirelessFT::timed_publish() {
   // first read all configs
 
-  sensor_msgs::Joy joy;
+  sensor_msgs::msg::Joy joy;
   joy.header.frame_id = "Wireless FT";
 
   // convert to Wrench first (locked)
@@ -894,7 +904,7 @@ int WirelessFT::timed_publish() {
   }
 
   int seq      = seq_;
-  rclcpp::Time time_now(msg_time_)
+  rclcpp::Time time_now(msg_time_);
   Eigen::VectorXd w1, w2, w3, w4, w5, w6;
   if (active_channels_mask & 0x01) {
     w1 = factory_calibrations[0].getWrench( sensor_counts.row(0) );
@@ -913,19 +923,20 @@ int WirelessFT::timed_publish() {
   }
   if (active_channels_mask & 0x20) {
     w6 = factory_calibrations[5].getWrench( sensor_counts.row(5) );
+  }
   pthread_mutex_unlock(&mutex);
   
 
   // publishing (not locked)
 
-  joy.header.seq      = seq;
+  // joy.header.seq      = seq;
   joy.header.stamp    = time_now;
   raw_sensor_counts_publisher->publish( joy );
 
   if (active_channels_mask & 0x01) {
     geometry_msgs::msg::WrenchStamped wrench1;
     wrench1.header.stamp = time_now;
-    wrench1.header.seq   = seq;
+    // wrench1.header.seq   = seq;
     wrench1.header.frame_id = "transducer1";
     wrench1.wrench.force.x  = w1(0);
     wrench1.wrench.force.y  = w1(1);
@@ -939,7 +950,7 @@ int WirelessFT::timed_publish() {
   if (active_channels_mask & 0x02) {
     geometry_msgs::msg::WrenchStamped wrench2;
     wrench2.header.stamp = time_now;
-    wrench2.header.seq   = seq;
+    // wrench2.header.seq   = seq;
     wrench2.header.frame_id = "transducer2";
     wrench2.wrench.force.x  = w2(0);
     wrench2.wrench.force.y  = w2(1);
@@ -953,7 +964,7 @@ int WirelessFT::timed_publish() {
   if (active_channels_mask & 0x04) {
     geometry_msgs::msg::WrenchStamped wrench3;
     wrench3.header.stamp = time_now;
-    wrench3.header.seq   = seq;
+    // wrench3.header.seq   = seq;
     wrench3.header.frame_id = "transducer3";
     wrench3.wrench.force.x  = w3(0);
     wrench3.wrench.force.y  = w3(1);
@@ -967,7 +978,7 @@ int WirelessFT::timed_publish() {
   if (active_channels_mask & 0x08) {
     geometry_msgs::msg::WrenchStamped wrench4;
     wrench4.header.stamp = time_now;
-    wrench4.header.seq   = seq;
+    // wrench4.header.seq   = seq;
     wrench4.header.frame_id = "transducer4";
     wrench4.wrench.force.x  = w4(0);
     wrench4.wrench.force.y  = w4(1);
@@ -981,7 +992,7 @@ int WirelessFT::timed_publish() {
   if (active_channels_mask & 0x10) {
     geometry_msgs::msg::WrenchStamped wrench5;
     wrench5.header.stamp = time_now;
-    wrench5.header.seq   = seq;
+    // wrench5.header.seq   = seq;
     wrench5.header.frame_id = "transducer5";
     wrench5.wrench.force.x  = w5(0);
     wrench5.wrench.force.y  = w5(1);
@@ -995,7 +1006,7 @@ int WirelessFT::timed_publish() {
   if (active_channels_mask & 0x20) {
     geometry_msgs::msg::WrenchStamped wrench6;
     wrench6.header.stamp = time_now;
-    wrench6.header.seq   = seq;
+    // wrench6.header.seq   = seq;
     wrench6.header.frame_id = "transducer6";
     wrench6.wrench.force.x  = w6(0);
     wrench6.wrench.force.y  = w6(1);
@@ -1035,7 +1046,7 @@ int WirelessFT::readDataPacket()
  * "BIAS s1 s2" where s1 = "1,2,3,4,5,6,or*" and s2="ON or OFF".
  * We use "BIAS * ON".
  */
-bool WirelessFT::serviceCallback( std::shared_ptr<std_srvs::srv::Empty::Request> req, std::shared_ptr<std_srvs::srv::Empty::Response> res ) {
+void WirelessFT::serviceCallback( std::shared_ptr<std_srvs::srv::Empty::Request> req, std::shared_ptr<std_srvs::srv::Empty::Response> res ) {
   std::string response;
   // telnetCommand( response, "bias 3 on\r\n"); // only channel 3
   telnetCommand( response, "bias * on\r\n");
@@ -1123,8 +1134,7 @@ void WirelessFT::run() {
   // telnetCommand( response, "xpwr on\r\n" );
 
   // read at the twice the rate needed for publishing
-  int rate = trunc(2 * publish_rate);
-  RCLCPP_ERROR(this->get_logger(),  "sending XPWR: %s", ss.str().c_str() );
+  int rate = trunc(2 * publishRate);
   std::stringstream ss;
   ss << "rate " << rate << " 16\r\n";
   telnetCommand( response, ss.str() );
@@ -1143,18 +1153,19 @@ void WirelessFT::run() {
   // reading thread
   struct timeval tv;
   tv.tv_sec = 0;
-  tv.tv_usec = trunc(1000000. / publish_rate) ;  // select timeouts after 2x read period
+  tv.tv_usec = trunc(1000000. / publishRate) ;  // select timeouts after 2x read period
+  RCLCPP_ERROR(this->get_logger(),  "Starting to read..." );
 
   while( rclcpp::ok() ) {
     fd_set rfds;
     FD_ZERO(&rfds);
-    FD_SET(telnetSocket, &rdfs);
+    FD_SET(telnetSocket, &rfds);
 
     if (verbose > 1) RCLCPP_INFO(this->get_logger(),  "WirelessFT: iteration %ul received %ul", iteration, received );
     iteration ++;
 
     // check what is on the socket
-    int retVal = select(telnetSocket + 1, &rdfs, NULL, NULL, &tv);
+    int retVal = select(telnetSocket + 1, &rfds, NULL, NULL, &tv);
 
     if (retVal == -1) {
         RCLCPP_ERROR(this->get_logger(), "Socket closed! terminating");
@@ -1192,35 +1203,39 @@ static WirelessFT * wireless_ft_ptr;
 // we want our own handler for graceful reaction to cntl-c:
 // stop streaming and disconnect from the telnet control port.
 //
-void SIGINT_handler(int signal)
-{
-  RCLCPP_ERROR(this->get_logger(),  "tams_wireless_ft: received SIGINT, stopping streaming..." );
-  if (wireless_ft_ptr != NULL) {
-    wireless_ft_ptr->shutdown();
-  }
-  usleep( 1000*1000 );
-  RCLCPP_ERROR(this->get_logger(),  "tams_wireless_ft: exiting now..." );
-  exit( 0 );
-}
+// void SIGINT_handler(int signal)
+// {
+//   RCLCPP_ERROR(rclcpp::get_logger("rclcpp"),  "tams_wireless_ft: received SIGINT, stopping streaming..." );
+//   if (wireless_ft_ptr != NULL) {
+//     wireless_ft_ptr->shutdown();
+//   }
+//   usleep( 1000*1000 );
+//   RCLCPP_ERROR(rclcpp::get_logger("rclcpp"),  "tams_wireless_ft: exiting now..." );
+//   exit( 0 );
+// }
 
 
 
 int main( int argc, char ** argv ) {
-  std::signal(SIGINT, SIGINT_handler );
+  // std::signal(SIGINT, SIGINT_handler );
   rclcpp::init(argc, argv); // no default cntl-c handler
 
-  WirelessFT wirelessFT;
-  std::thread th1(&WirelessFT::run, wirelessFT);
+  std::shared_ptr<WirelessFT> wirelessFT = std::make_shared<WirelessFT>();
+  std::thread th1(std::bind(&WirelessFT::run, wirelessFT));
   // very high priority reading thread
   set_scheduling(th1, SCHED_FIFO, 98);
 
   // high priority ros thread
-  std::thread th2([]() {rclcpp::spin(); } );
+  std::thread th2([wirelessFT]() { rclcpp::spin(wirelessFT); } );
   set_scheduling(th2, SCHED_FIFO, 97);
-
+  // rclcpp::spin(wirelessFT);
+  
   th2.join();
+  RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "ROS thread terminated");
   rclcpp::shutdown();
 
   // wait for spin to finish
   th1.join();
+  RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Reading thread terminated");
 }
+

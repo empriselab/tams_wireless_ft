@@ -6,31 +6,31 @@ find_package(ament_cmake REQUIRED)
   # eigen
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 find_package(sensor_msgs REQUIRED)  
 find_package(geometry_msgs REQUIRED)
-find_package(tf2 REQUIRED)
+# find_package(tf2 REQUIRED)
 # find_package(tf2_conversions REQUIRED)
-find_package(tf2_bullet REQUIRED)
+# find_package(tf2_bullet REQUIRED)
+find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
+# find_package(pthread REQUIRED)
 
 set(deps 
   rclcpp
   std_msgs
   sensor_msgs
   geometry_msgs
-  tf2
-  tf2_bullet
+  std_srvs
+  # tf2
+  # tf2_bullet
 )
 
 
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
 # include_directories(include)
-# include_directories(
-#   include
-#   $(Boost_INCLUDE_DIRS)
-#   $(Eigen_INCLUDE_DIRS)
-# )
+
 
 ## Declare a C++ library
 # add_library(tams_wireless_ft
@@ -59,7 +59,12 @@ add_executable(${PROJECT_NAME} src/wireless_ft.cpp)
 # )
 
 ament_target_dependencies(${PROJECT_NAME} 
-  ${deps} Eigen3 pthread
+  ${deps} Eigen3 # pthread
+)
+
+target_include_directories(${PROJECT_NAME}
+  PUBLIC
+    $(Boost_INCLUDE_DIRS)
 )
 
 install(TARGETS ${PROJECT_NAME}
