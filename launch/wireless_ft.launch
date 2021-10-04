@@ -2,7 +2,7 @@
 <launch>
 
   <arg name="launch_rviz" default="false" />
-  <arg name="ip_address" default="192.168.0.3" />
+  <arg name="ip_address" default="192.168.2.3" />
 
 
   <!-- 
@@ -10,6 +10,7 @@
 
   2016.12.13 - fnh: created
   -->
+  <remap from="/wireless_ft/wrench_1" to="/forque/forqueSensor"/>
 
   <node name="wireless_ft" pkg="tams_wireless_ft" type="tams_wireless_ft" output="screen" >
     <param name="ip_address" value="$(arg ip_address)" />
@@ -34,6 +35,7 @@
         args="0 0 0  0 0 0 world wireless_ft_frame 1" />
   -->
 
+  <node name="reset_ft_bias" pkg="tams_wireless_ft" type="reset_ft_bias.py" output="screen" />
 
   <!-- rviz --> 
   <group if="$(arg launch_rviz)">
